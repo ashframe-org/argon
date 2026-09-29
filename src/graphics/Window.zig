@@ -717,7 +717,10 @@ pub fn setClipboardString(string: []const u8) void {
 
 pub fn init() void { // MARK: init()
 	_ = c.glfwSetErrorCallback(GLFWCallbacks.errorCallback);
-	const windowTitle = "Cubyz " ++ main.settings.version.version;
+	// --- ASHFRAME (Argon rebrand): window title. Version string untouched
+	// (handshake compatibility depends on it). ---
+	const windowTitle = "Argon";
+	// --- ASHFRAME (Argon rebrand) ---
 
 	if (builtin.target.os.tag == .macos) {
 		// NOTE(blackedout): Since the Vulkan loader is linked statically for Cubyz on macOS, libvulkan*.dylib is part of the Cubyz executable
@@ -732,7 +735,7 @@ pub fn init() void { // MARK: init()
 	}
 
 	if (c.glfwVulkanSupported() == c.GLFW_FALSE) {
-		std.log.err("Vulkan is not supported. Please update your drivers if you want to keep playing Cubyz in the future.", .{});
+		std.log.err("Vulkan is not supported. Please update your drivers if you want to keep playing Argon in the future.", .{});
 	} else {
 		c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
 		c.glfwWindowHint(c.GLFW_VISIBLE, @intFromBool(main.settings.launchConfig.vulkanTestingMode));

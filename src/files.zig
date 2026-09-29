@@ -73,7 +73,7 @@ fn flawedInit(homePath: []const u8) !void {
 
 pub fn init(homePath: []const u8) void {
 	flawedInit(homePath) catch |err| {
-		std.log.err("Error {s} while opening global Cubyz directory. Using working directory instead.", .{@errorName(err)});
+		std.log.err("Error {s} while opening global game directory. Using working directory instead.", .{@errorName(err)});
 	};
 }
 

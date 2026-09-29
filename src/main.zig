@@ -324,7 +324,7 @@ pub fn main(args: std.process.Init.Minimal) void { // MARK: main()
 		_ = argIterator.skip();
 		if (argIterator.next() != null) {
 			std.log.info(
-				\\Cubyz does not accept any command line arguments.
+				\\Argon does not accept any command line arguments.
 				\\All launch-time configuration is done through the "launchConfig.zon" file in the game's working directory. See that file for the available options.
 			, .{});
 			std.process.exit(0);
@@ -334,7 +334,7 @@ pub fn main(args: std.process.Init.Minimal) void { // MARK: main()
 	std.log.info("Starting game with version {s}", .{settings.version.version});
 
 	if (builtin.os.tag == .windows) {
-		std.log.warn("Cubyz detected it's running on Windows. For optimal performance and reduced power usage please install Linux.", .{});
+		std.log.warn("Argon detected it's running on Windows. For optimal performance and reduced power usage please install Linux.", .{});
 	}
 
 	settings.environment.init(args.environ);

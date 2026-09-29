@@ -223,9 +223,9 @@ fn checkValidationLayerSupport() bool {
 pub fn createInstance() void {
 	const appInfo = c.VkApplicationInfo{
 		.sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
-		.pApplicationName = "Cubyz",
+		.pApplicationName = "Argon",
 		.applicationVersion = c.VK_MAKE_VERSION(0, 0, 0),
-		.pEngineName = "Cubyz",
+		.pEngineName = "Argon",
 		.engineVersion = c.VK_MAKE_VERSION(0, 0, 0),
 		.apiVersion = c.VK_API_VERSION_1_3,
 	};

@@ -61,7 +61,7 @@ fn copy() void {
 }
 
 fn selectFile() void {
-	const result: [*:0]const u8 = c.tinyfd_saveFileDialog("Select File to save Account Code", "Cubyz Account.txt", 1, @as([*]const [*:0]const u8, &.{"*.txt"}), "Text Files") orelse return;
+	const result: [*:0]const u8 = c.tinyfd_saveFileDialog("Select File to save Account Code", "Argon Account.txt", 1, @as([*]const [*:0]const u8, &.{"*.txt"}), "Text Files") orelse return;
 	const fileName = std.mem.span(result);
 	main.files.cwd().write(fileName, accountCode.?.text) catch |err| {
 		std.log.err("Failed to write Account Code to file: {s}", .{@errorName(err)});

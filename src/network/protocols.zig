@@ -91,6 +91,72 @@ pub const handShake = struct { // MARK: handShake
 	var assetsLoadedCondition: main.utils.Condition = .{};
 	var hasFinishedLoadingAssets: bool = false;
 	var handshakeZon: ZonElement = undefined;
+	// --- ASHFRAME CUSTOM CLIENT: unpack assets off the network thread. ---
+	var assetsUnpackDone: Atomic(bool) = .init(true);
+	var assetsUnpackFailed: Atomic(bool) = .init(false);
+	var assetsUnpackMutex: main.utils.Mutex = .{};
+
+	const AssetUnpackTask = struct {
+		data: []const u8,
+
+		pub const vtable = utils.ThreadPool.VTable{
+			.getPriority = main.meta.castFunctionSelfToAnyopaque(getPriority),
+			.isStillNeeded = main.meta.castFunctionSelfToAnyopaque(isStillNeeded),
+			.run = main.meta.castFunctionSelfToAnyopaque(run),
+			.clean = main.meta.castFunctionSelfToAnyopaque(clean),
+			.taskType = .misc,
+		};
+
+		pub fn getPriority(_: *AssetUnpackTask) f32 {
+			return std.math.floatMax(f32);
+		}
+
+		pub fn isStillNeeded(_: *AssetUnpackTask) bool {
+			return true;
+		}
+
+		pub fn run(self: *AssetUnpackTask) void {
+			defer self.clean();
+			assetsUnpackMutex.lock();
+			defer assetsUnpackMutex.unlock();
+			main.files.cubyzDir().deleteTree("serverAssets") catch {}; // Delete old assets.
+			var dir = main.files.cubyzDir().openDir("serverAssets") catch |err| {
+				std.log.err("Ashframe client: could not open serverAssets: {s}", .{@errorName(err)});
+				assetsUnpackFailed.store(true, .release);
+				assetsUnpackDone.store(true, .release);
+				return;
+			};
+			defer dir.close();
+			utils.Compression.unpack(dir, self.data) catch |err| {
+				std.log.err("Ashframe client: asset unpack failed: {s}", .{@errorName(err)});
+				assetsUnpackFailed.store(true, .release);
+				assetsUnpackDone.store(true, .release);
+				return;
+			};
+			main.ashframe_client.noteAssetsUnpacked(self.data);
+			assetsUnpackDone.store(true, .release);
+			// --- ASHFRAME CUSTOM CLIENT: timing. ---
+			main.ashframe_client.timingMark("assets unpack done");
+			// --- ASHFRAME CUSTOM CLIENT ---
+		}
+
+		pub fn clean(self: *AssetUnpackTask) void {
+			main.globalAllocator.free(self.data);
+			main.globalAllocator.destroy(self);
+		}
+	};
+
+	pub fn waitForAssetUnpack() !void {
+		while (!assetsUnpackDone.load(.acquire)) {
+			// --- ASHFRAME CUSTOM CLIENT: keep GC cycles running so a long
+			// join never trips the 20 s sync-point watchdog. ---
+			main.heap.GarbageCollection.syncPoint();
+			// --- ASHFRAME CUSTOM CLIENT ---
+			main.io.sleep(.fromMilliseconds(5), .awake) catch {};
+		}
+		if (assetsUnpackFailed.load(.acquire)) return error.AssetUnpackFailed;
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	pub fn clientReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		const newState = try reader.readEnum(Connection.HandShakeState);
@@ -117,12 +183,49 @@ pub const handShake = struct { // MARK: handShake
 				},
 				.assets => {
 					std.log.info("Received assets.", .{});
-					main.files.cubyzDir().deleteTree("serverAssets") catch {}; // Delete old assets.
-					var dir = try main.files.cubyzDir().openDir("serverAssets");
-					defer dir.close();
-					try utils.Compression.unpack(dir, reader.remaining);
+					// --- ASHFRAME CUSTOM CLIENT: timing. ---
+					main.ashframe_client.timingMark("assets pack received");
+					// --- ASHFRAME CUSTOM CLIENT ---
+					// --- ASHFRAME CUSTOM CLIENT: server-confirmed skip. ---
+					// Empty payload = the server confirms our announced hash:
+					// cache is current, nothing to unpack. Only ever sent in
+					// reply to an announcement, so vanilla flow is untouched.
+					if (reader.remaining.len == 0 and main.ashframe_client.isActive()) {
+						main.ashframe_client.infoLog("client: server confirmed cached pack, skipping.", .{});
+						// --- ASHFRAME CUSTOM CLIENT: timing. ---
+						main.ashframe_client.timingMark("assets pack skipped (server-confirmed)");
+						// --- ASHFRAME CUSTOM CLIENT ---
+						assetsUnpackDone.store(true, .release);
+						assetsUnpackFailed.store(false, .release);
+					} else if (main.ashframe_client.checkAssetPack(reader.remaining) == .unchanged) {
+						// --- ASHFRAME CUSTOM CLIENT: skip unpack if pack unchanged. ---
+						main.ashframe_client.infoLog("client: asset pack unchanged, keeping serverAssets.", .{});
+						// --- ASHFRAME CUSTOM CLIENT: timing. ---
+						main.ashframe_client.timingMark("assets unpack skipped (cached)");
+						// --- ASHFRAME CUSTOM CLIENT ---
+						assetsUnpackDone.store(true, .release);
+						assetsUnpackFailed.store(false, .release);
+					} else {
+						assetsUnpackDone.store(false, .release);
+						assetsUnpackFailed.store(false, .release);
+						const task = main.globalAllocator.create(AssetUnpackTask);
+						errdefer main.globalAllocator.destroy(task);
+						task.* = .{
+							.data = main.globalAllocator.dupe(u8, reader.remaining),
+						};
+						main.threadPool.addTask(task, &AssetUnpackTask.vtable);
+						// noteAssetsUnpacked runs after the background unpack
+						// finishes; finishHandshake waits for it (see below).
+						// --- ASHFRAME CUSTOM CLIENT: timing. ---
+						main.ashframe_client.timingMark("assets unpack dispatched");
+						// --- ASHFRAME CUSTOM CLIENT ---
+					}
+					// --- ASHFRAME CUSTOM CLIENT ---
 				},
 				.serverData => {
+					// --- ASHFRAME CUSTOM CLIENT: timing. ---
+					main.ashframe_client.timingMark("serverData received");
+					// --- ASHFRAME CUSTOM CLIENT ---
 					handshakeZon = ZonElement.parseFromString(main.stackAllocator, null, reader.remaining);
 					defer handshakeZon.deinit(main.stackAllocator);
 					conn.handShakeState.store(.complete, .monotonic);
@@ -255,6 +358,14 @@ pub const handShake = struct { // MARK: handShake
 				if (main.network.authentication.KeyCollection.initialized) {
 					zonObject.put("keys", main.network.authentication.KeyCollection.getPublicKeys(main.stackAllocator));
 				}
+				// --- ASHFRAME CUSTOM CLIENT: announce cached pack hash. ---
+				// Vanilla servers ignore unknown fields; active only on the
+				// Ashframe server. The server sends an empty marker instead
+				// of the pack when it matches, else the full pack as usual.
+				if (main.ashframe_client.announcedPackHash()) |h| {
+					zonObject.put("ashframePackHash", @as(i64, @bitCast(h)));
+				}
+				// --- ASHFRAME CUSTOM CLIENT ---
 				try conn.secureChannel.startTlsHandshake();
 				conn.secureChannel.finishedCollectingClientVerificationData = true;
 
@@ -263,6 +374,9 @@ pub const handShake = struct { // MARK: handShake
 				defer main.stackAllocator.free(data);
 
 				conn.send(.secure, id, data);
+				// --- ASHFRAME CUSTOM CLIENT: timing. ---
+				main.ashframe_client.timingMark("handshake/userData sent");
+				// --- ASHFRAME CUSTOM CLIENT ---
 			},
 			.reload => {
 				conn.send(.secure, id, &.{@intFromEnum(Connection.HandShakeState.reload)});
@@ -343,6 +457,10 @@ pub const chunkTransmission = struct { // MARK: chunkTransmission
 	pub const MeshGenerationTask = struct {
 		pos: chunk.ChunkPosition,
 		data: []const u8,
+		// --- ASHFRAME CUSTOM CLIENT: skip the lightmap deferral (used for
+		// entries that already waited it out). ---
+		forceBuild: bool = false,
+		// --- ASHFRAME CUSTOM CLIENT ---
 
 		pub const vtable = utils.ThreadPool.VTable{
 			.getPriority = main.meta.castFunctionSelfToAnyopaque(getPriority),
@@ -365,6 +483,22 @@ pub const chunkTransmission = struct { // MARK: chunkTransmission
 		}
 
 		pub fn run(self: *MeshGenerationTask) void {
+			// --- ASHFRAME CUSTOM CLIENT: cache the blob (worker thread). ---
+			main.ashframe_client.storeChunk(self.pos, self.data);
+			// --- ASHFRAME CUSTOM CLIENT ---
+			// --- ASHFRAME CUSTOM CLIENT: defer the build until the lightmap
+			// fragment exists, so meshes are never born dark. Deferred data
+			// is owned by mesh_storage.pendingLightMeshes; retries re-enter
+			// here as fresh tasks through the stock path below. ---
+			if (!self.forceBuild) {
+				if (renderer.mesh_storage.getLightMapPiece(self.pos.wx, self.pos.wy, self.pos.voxelSize) == null) {
+					if (renderer.mesh_storage.deferMeshForLightmap(self.pos, self.data)) {
+						main.globalAllocator.destroy(self);
+						return;
+					}
+				}
+			}
+			// --- ASHFRAME CUSTOM CLIENT ---
 			defer self.clean();
 			const pos = self.pos;
 			const mesh = main.renderer.chunk_meshing.ChunkMesh.init(pos, self.data) catch |err| {
@@ -537,8 +671,12 @@ pub const blockUpdate = struct { // MARK: blockUpdate
 
 	pub fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
 		while (reader.remaining.len != 0) {
+			const pos = try reader.readVec(Vec3i);
+			// --- ASHFRAME CUSTOM CLIENT: invalidate edited chunk. ---
+			main.ashframe_client.invalidateChunk(pos[0], pos[1], pos[2]);
+			// --- ASHFRAME CUSTOM CLIENT ---
 			renderer.mesh_storage.updateBlock(.{
-				.pos = try reader.readVec(Vec3i),
+				.pos = pos,
 				.newBlock = Block.fromInt(try reader.readInt(u32)),
 				.blockEntityData = try reader.readSlice(try reader.readInt(usize)),
 			});
@@ -861,13 +999,15 @@ pub const lightMapRequest = struct { // MARK: lightMapRequest
 pub const lightMapTransmission = struct { // MARK: lightMapTransmission
 	pub const id: u8 = 12;
 
-	const LightMapTask = struct {
+	// --- ASHFRAME CUSTOM CLIENT: pub for cache-hit tasks. ---
+	pub const LightMapTask = struct {
 		wx: i32,
 		wy: i32,
 		voxelSizeShift: u5,
 		data: []const u8,
 
-		const vtable = utils.ThreadPool.VTable{
+		// --- ASHFRAME CUSTOM CLIENT: pub, see above. ---
+		pub const vtable = utils.ThreadPool.VTable{
 			.getPriority = main.meta.castFunctionSelfToAnyopaque(getPriority),
 			.isStillNeeded = main.meta.castFunctionSelfToAnyopaque(isStillNeeded),
 			.run = main.meta.castFunctionSelfToAnyopaque(run),
@@ -886,6 +1026,9 @@ pub const lightMapTransmission = struct { // MARK: lightMapTransmission
 
 		pub fn run(self: *LightMapTask) void {
 			defer self.clean();
+			// --- ASHFRAME CUSTOM CLIENT: cache the fragment. ---
+			main.ashframe_client.storeLightMap(self.wx, self.wy, @as(u31, 1) << self.voxelSizeShift, self.data);
+			// --- ASHFRAME CUSTOM CLIENT ---
 
 			const pos = main.server.terrain.SurfaceMap.MapFragmentPosition{
 				.wx = self.wx,

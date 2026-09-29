@@ -1511,7 +1511,14 @@ pub const Connection = struct { // MARK: Connection
 	queuedConfirmations: main.utils.CircularBufferQueue(ConfirmationData),
 	mtuEstimate: u16 = minMtu,
 
-	bandwidthEstimateInBytesPerRtt: f32 = minMtu,
+	// --- ASHFRAME CUSTOM CLIENT: start the reliable-channel congestion
+	// window at ~10x minMtu instead of 1x. Stock slow-start needs ~15
+	// round-trips to ramp for a 200 KB handshake payload; on a 150 ms link
+	// that is the entire join delay. Packet size (mtuEstimate) is untouched,
+	// so no fragmentation risk; only more small packets per RTT. Revert by
+	// restoring `= minMtu`. Benefits vanilla servers too (send pacing only).
+	bandwidthEstimateInBytesPerRtt: f32 = 10 * minMtu,
+	// --- ASHFRAME CUSTOM CLIENT ---
 	slowStart: bool = true,
 	relativeSendTime: i64 = 0,
 	relativeIdleTime: i64 = 0,
@@ -1953,6 +1960,9 @@ pub const Connection = struct { // MARK: Connection
 		if (self.user) |user| {
 			main.server.disconnect(user);
 		} else {
+			// --- ASHFRAME CUSTOM CLIENT: flush staged cache, end session. ---
+			main.ashframe_client.sessionEnd();
+			// --- ASHFRAME CUSTOM CLIENT ---
 			self.handShakeWaiting.broadcast();
 			if (self.handShakeState.load(.monotonic) == .complete) {
 				main.exitToMenu();

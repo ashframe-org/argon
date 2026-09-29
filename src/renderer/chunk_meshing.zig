@@ -1337,6 +1337,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		}
 		LightRefreshTask.schedule(pos);
 	}
+
 	const LightRefreshTask = struct {
 		pos: chunk.ChunkPosition,
 

@@ -217,6 +217,21 @@ pub const launchConfig = struct {
 
 	pub var vulkanTestingMode: bool = false;
 
+	// --- ASHFRAME CUSTOM CLIENT: per-server caches (inert elsewhere). ---
+	pub var ashframeCache: bool = true;
+	pub var ashframeServer: []const u8 = "cubyz.ashframe.net";
+	pub var ashframeCacheTTLHours: u32 = 24;
+	/// RAM write buffer: staged blobs flush to disk at this size (MB)…
+	pub var ashframeFlushMaxMB: u32 = 124;
+	/// …or at this interval (minutes), whichever first. Plus on (re)connect.
+	pub var ashframeFlushIntervalMinutes: u32 = 5;
+	/// On-disk per-server budget (MB). Random eviction down to 4/5 of cap.
+	pub var ashframeCacheMaxMB: u32 = 1024;
+	/// Extra diagnostic logs ([timing] join stages, cache decisions).
+	pub var ashframeDebug: bool = true;
+	/// Chat window width in px (text wraps at this width).
+	pub var chatWidth: f32 = 480;
+
 	pub fn init() void {
 		const zon: ZonElement = main.files.cwd().readToZon(main.stackAllocator, "launchConfig.zon") catch |err| blk: {
 			std.log.err("Could not read launchConfig.zon: {s}", .{@errorName(err)});
@@ -229,6 +244,16 @@ pub const launchConfig = struct {
 		autoEnterWorld = main.globalArena.dupe(u8, zon.get([]const u8, "autoEnterWorld") orelse autoEnterWorld);
 		preferredAuthenticationAlgorithm = zon.get(main.network.authentication.KeyTypeEnum, "preferredAuthenticationAlgorithm") orelse preferredAuthenticationAlgorithm;
 		vulkanTestingMode = zon.get(bool, "vulkanTestingMode") orelse false;
+		// --- ASHFRAME CUSTOM CLIENT ---
+		ashframeCache = zon.get(bool, "ashframeCache") orelse ashframeCache;
+		ashframeServer = main.globalArena.dupe(u8, zon.get([]const u8, "ashframeServer") orelse ashframeServer);
+		ashframeCacheTTLHours = zon.get(u32, "ashframeCacheTTLHours") orelse ashframeCacheTTLHours;
+		ashframeFlushMaxMB = zon.get(u32, "ashframeFlushMaxMB") orelse ashframeFlushMaxMB;
+		ashframeFlushIntervalMinutes = zon.get(u32, "ashframeFlushIntervalMinutes") orelse ashframeFlushIntervalMinutes;
+		ashframeCacheMaxMB = zon.get(u32, "ashframeCacheMaxMB") orelse ashframeCacheMaxMB;
+		ashframeDebug = zon.get(bool, "ashframeDebug") orelse ashframeDebug;
+		chatWidth = zon.get(f32, "chatWidth") orelse chatWidth;
+		// --- ASHFRAME CUSTOM CLIENT ---
 	}
 };
 

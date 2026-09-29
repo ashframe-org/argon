@@ -47,6 +47,9 @@ fn connectFromNewThread() void {
 
 pub fn start(_ip: []const u8, manager: *ConnectionManager) void {
 	ip = main.globalAllocator.dupe(u8, _ip);
+	// --- ASHFRAME CUSTOM CLIENT ---
+	main.ashframe_client.noteDialAddress(_ip);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	connectionManager = manager;
 	state = .init(.connecting);
 	gui.openModalWindowFromRef(&window);
@@ -98,6 +101,9 @@ pub fn update() void {
 				state.store(.failed, .release);
 				continue :stateSwitch .failed;
 			};
+			// --- ASHFRAME CUSTOM CLIENT: session is live from here. ---
+			main.ashframe_client.sessionStart();
+			// --- ASHFRAME CUSTOM CLIENT ---
 			gui.closeWindowFromRef(&window);
 			main.globalAllocator.free(settings.lastUsedIPAddress);
 			settings.lastUsedIPAddress = main.globalAllocator.dupe(u8, ip);

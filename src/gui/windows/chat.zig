@@ -168,8 +168,14 @@ fn refresh() void {
 	}
 }
 
+// --- ASHFRAME CUSTOM CLIENT: configurable chat width (px). ---
+fn chatWidth() f32 {
+	return @min(@max(main.settings.launchConfig.chatWidth, 256), 1200);
+}
+// --- ASHFRAME CUSTOM CLIENT ---
+
 pub fn onOpen() void {
-	input = TextInput.init(.{0, 0}, 256, 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry)});
+	input = TextInput.init(.{0, 0}, chatWidth(), 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry)});
 	refresh();
 }
 
@@ -211,7 +217,7 @@ pub fn update() void {
 	if (!messageQueue.isEmpty()) {
 		const currentTime: i32 = @truncate(main.timestamp().toMilliseconds());
 		while (messageQueue.popFront()) |msg| {
-			history.append(Label.init(.{0, 0}, 256, msg, .left));
+			history.append(Label.init(.{0, 0}, chatWidth(), msg, .left));
 			main.globalAllocator.free(msg);
 			expirationTime.append(currentTime +% messageTimeout);
 		}

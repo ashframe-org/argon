@@ -36,6 +36,19 @@ var storageLists: [settings.highestSupportedLod + 1]*[storageSize*storageSize*st
 var mapStorageLists: [settings.highestSupportedLod + 1]*[storageSize*storageSize]Atomic(?*LightMap.LightMapFragment) = undefined;
 var meshList: main.List(*chunk_meshing.ChunkMesh) = .empty;
 var priorityMeshUpdateList: main.utils.ConcurrentQueue(chunk.ChunkPosition) = undefined;
+// --- ASHFRAME CUSTOM CLIENT: mesh builds deferred until their lightmap
+// fragment exists. Guarded by `mutex` (workers append, render thread scans).
+// See deferMeshForLightmap. ---
+const PendingLightMesh = struct {
+	pos: chunk.ChunkPosition,
+	data: []const u8,
+	atMs: i64,
+};
+var pendingLightMeshes: main.ListManaged(PendingLightMesh) = undefined;
+const maxPendingLightMeshes: usize = 512;
+const pendingLightMeshExpiryMs: i64 = 5000;
+var pendingLightScanMs: i64 = 0;
+// --- ASHFRAME CUSTOM CLIENT ---
 pub var updatableList: main.List(chunk.ChunkPosition) = .empty;
 var mapUpdatableList: main.utils.ConcurrentQueue(*LightMap.LightMapFragment) = undefined;
 var lastPx: i32 = 0;
@@ -81,6 +94,9 @@ pub fn init() void { // MARK: init()
 		@memset(mapStorageList.*, .init(null));
 	}
 	priorityMeshUpdateList = .init(main.globalAllocator, 16);
+	// --- ASHFRAME CUSTOM CLIENT ---
+	pendingLightMeshes = .init(main.globalAllocator);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	mapUpdatableList = .init(main.globalAllocator, 16);
 }
 
@@ -106,6 +122,12 @@ pub fn deinit() void {
 		map.deferredDeinit();
 	}
 	mapUpdatableList.deinit();
+	// --- ASHFRAME CUSTOM CLIENT ---
+	for (pendingLightMeshes.items) |entry| {
+		main.globalAllocator.free(entry.data);
+	}
+	pendingLightMeshes.deinit();
+	// --- ASHFRAME CUSTOM CLIENT ---
 	priorityMeshUpdateList.deinit();
 	meshList.clearAndFree(main.globalAllocator);
 	main.heap.GarbageCollection.waitForFreeCompletion();
@@ -476,7 +498,18 @@ fn createNewMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16, meshR
 					if (node.mesh.load(.acquire)) |mesh| {
 						std.debug.assert(std.meta.eql(pos, mesh.pos));
 					} else {
-						meshRequests.append(pos);
+						// --- ASHFRAME CUSTOM CLIENT: serve from disk if cached. ---
+						if (main.ashframe_client.loadChunk(pos)) |cached| {
+							const task = main.globalAllocator.create(network.protocols.chunkTransmission.MeshGenerationTask);
+							task.* = .{
+								.pos = pos,
+								.data = cached,
+							};
+							main.threadPool.addTask(task, &network.protocols.chunkTransmission.MeshGenerationTask.vtable);
+						} else {
+							meshRequests.append(pos);
+						}
+						// --- ASHFRAME CUSTOM CLIENT ---
 					}
 				}
 			}
@@ -567,6 +600,28 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	freeOldMeshes(olderPx, olderPy, olderPz, olderRD);
 
 	createNewMeshes(olderPx, olderPy, olderPz, olderRD, &meshRequests, &mapRequests);
+
+	// --- ASHFRAME CUSTOM CLIENT: serve lightmaps from disk if cached. ---
+	{
+		var kept: usize = 0;
+		for (mapRequests.items) |req| {
+			if (main.ashframe_client.loadLightMap(req.wx, req.wy, req.voxelSize)) |cached| {
+				const task = main.globalAllocator.create(network.protocols.lightMapTransmission.LightMapTask);
+				task.* = .{
+					.wx = req.wx,
+					.wy = req.wy,
+					.voxelSizeShift = req.voxelSizeShift,
+					.data = cached,
+				};
+				main.threadPool.addTask(task, &network.protocols.lightMapTransmission.LightMapTask.vtable);
+			} else {
+				mapRequests.items[kept] = req;
+				kept += 1;
+			}
+		}
+		mapRequests.items.len = kept;
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	// Make requests as soon as possible to reduce latency:
 	network.protocols.lightMapRequest.sendRequest(conn, mapRequests.items);
@@ -721,6 +776,7 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		mesh.uploadData();
 		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
 	}
+	var newMapsStored = false;
 	while (mapUpdatableList.popFront()) |map| {
 		if (!isMapInRenderDistance(map.pos)) {
 			map.deferredDeinit();
@@ -729,8 +785,42 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 			if (mapPointer) |old| {
 				old.deferredDeinit();
 			}
+			newMapsStored = true;
 		}
 	}
+	// --- ASHFRAME CUSTOM CLIENT: retry deferred mesh builds. Runs when new
+	// fragments landed (or ~1/s so expiry can't strand entries). Each entry
+	// either re-enters the stock pipeline as a fresh task, builds now if it
+	// waited too long, or is dropped when out of range. Only addTask calls
+	// happen under the lock; the heavy builds run on workers.
+	if (pendingLightMeshes.items.len != 0) {
+		const nowMs = main.timestamp().toMilliseconds();
+		if (newMapsStored or nowMs -% pendingLightScanMs >= 1000) {
+			pendingLightScanMs = nowMs;
+			var i: usize = pendingLightMeshes.items.len;
+			while (i > 0) {
+				i -= 1;
+				const entry = pendingLightMeshes.items[i];
+				const hasFragment = getLightMapPiece(entry.pos.wx, entry.pos.wy, entry.pos.voxelSize) != null;
+				const expired = nowMs -% entry.atMs >= pendingLightMeshExpiryMs;
+				const inRange = isInRenderDistance(entry.pos);
+				if (!inRange) {
+					main.globalAllocator.free(entry.data);
+					_ = pendingLightMeshes.swapRemove(i);
+				} else if (hasFragment or expired) {
+					const task = main.globalAllocator.create(network.protocols.chunkTransmission.MeshGenerationTask);
+					task.* = .{
+						.pos = entry.pos,
+						.data = entry.data,
+						.forceBuild = true,
+					};
+					main.threadPool.addTask(task, &network.protocols.chunkTransmission.MeshGenerationTask.vtable);
+					_ = pendingLightMeshes.swapRemove(i);
+				}
+			}
+		}
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 	while (updatableList.items.len != 0) {
 		// TODO: Find a faster solution than going through the entire list every frame.
 		var closestPriority: f32 = -std.math.floatMax(f32);
@@ -801,6 +891,26 @@ pub fn finishMesh(pos: chunk.ChunkPosition) void {
 	defer mutex.unlock();
 	updatableList.append(main.globalAllocator, pos);
 }
+
+// --- ASHFRAME CUSTOM CLIENT: defer mesh creation until the lightmap
+// fragment exists, so meshes are never born dark. Called from mesh-build
+// worker threads; takes ownership of `data` on true. Returns false when
+// the pending list is full (caller falls back to the stock path).
+// The scan in updateMeshes retries entries once their fragment lands;
+// entries that outlive the wait (expiry) or leave render distance are
+// built/dropped there, so nothing stalls forever and nothing leaks.
+pub fn deferMeshForLightmap(pos: chunk.ChunkPosition, data: []const u8) bool {
+	mutex.lock();
+	defer mutex.unlock();
+	if (pendingLightMeshes.items.len >= maxPendingLightMeshes) return false;
+	pendingLightMeshes.append(.{
+		.pos = pos,
+		.data = data,
+		.atMs = main.timestamp().toMilliseconds(),
+	});
+	return true;
+}
+// --- ASHFRAME CUSTOM CLIENT ---
 
 // MARK: updaters
 

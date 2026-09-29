@@ -17,6 +17,9 @@ pub const client = @import("client.zig");
 pub const entity = @import("entity.zig");
 pub const entityModel = @import("entityModel.zig");
 pub const files = @import("files.zig");
+// --- ASHFRAME CUSTOM CLIENT ---
+pub const ashframe_client = @import("ashframe_client.zig");
+// --- ASHFRAME CUSTOM CLIENT ---
 pub const fmt = @import("fmt.zig");
 pub const game = @import("game.zig");
 pub const graphics = @import("graphics.zig");

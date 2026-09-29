@@ -1,3 +1,19 @@
+# Argon (Ashframe Cubyz fork)
+
+Performance fork of [Cubyz](https://github.com/PixelGuys/Cubyz) (branch
+`ashframe`, based on tag `0.4.1`): per-server chunk/lightmap disk cache
+with region bucketing, in-RAM read cache, connect prefetch, lit reveal
+gate, clock sync, mesh deferral until light arrives, stable ping. On
+other servers it behaves like stock 0.4.1.
+
+Clone and build (`git pull` for updates). Optional `launchConfig.zon`
+tweaks — see the stock instructions below; our keys are
+`ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
+`ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
+`ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
+`chatWidth`.
+
+---
 # Cubyz
 Cubyz is a 3D voxel sandbox game (inspired by Minecraft).
 

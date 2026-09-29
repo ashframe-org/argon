@@ -1,70 +1,46 @@
-# Argon (Ashframe Cubyz fork)
+# Argon (Ashframe Custom Client)
 
-Performance fork of [Cubyz](https://github.com/PixelGuys/Cubyz) (branch
-`ashframe`, based on tag `0.4.1`): per-server chunk/lightmap disk cache
-with region bucketing, in-RAM read cache, connect prefetch, lit reveal
-gate, clock sync, mesh deferral until light arrives, stable ping. On
-other servers it behaves like stock 0.4.1.
+Client-side cache for the Ashframe Cubyz server. On other servers it
+behaves exactly like stock Cubyz 0.4.1.
 
-Clone and build (`git pull` for updates). Optional `launchConfig.zon`
-tweaks — see the stock instructions below; our keys are
-`ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
-`ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
-`ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
-`chatWidth`.
+## What it does
 
----
-# Cubyz
-Cubyz is a 3D voxel sandbox game (inspired by Minecraft).
+- Skips re-unpacking server addons when unchanged.
+- Caches chunks and lighting on disk; rejoins serve from disk and RAM.
+- Meshes wait for light data, so lighting is correct on arrival.
+- Reveals the world once nearby light is resident and the clock synced.
+- Faster handshake on high-latency links; stable ping readout.
+- Edited areas re-download; old data expires on its own.
+- Delete `~/.cubyz/ashframeCache/` anytime to force a full redownload.
 
-Cubyz has a bunch of interesting/unique features such as:
-- Level of Detail (→ This enables far view distances.)
-- 3D Chunks (→ There is no height or depth limit.)
-- Procedural Crafting (→ There are infinite possibilites for tool crafting.)
+## Vanilla vs custom (measured, high-latency link)
 
-# About
-Cubyz is written in <img src="https://github.com/PixelGuys/Cubyz/assets/43880493/04dc89ca-3ef2-4167-9e1a-e23f25feb67c" width="20" height="20">
-[Zig](https://ziglang.org/), a rather small language with some cool features and a focus on readability.
+| | Vanilla 0.4.1 | Ashframe client |
+|---|---|---|
+| Repeat join | 28–42 s | ~7–13 s |
+| Asset pack re-download | every join (~17–29 s) | skipped when unchanged |
+| Revisit / teleport back | full re-stream | instant from disk |
+| Dark shadows / night bright flash | yes | no |
+| Cached rejoin, first serve pass | streams | fast (one disk read per region file) |
+| Disk cache | re-downloads | capped, default 256 MB |
+| Extra RAM | — | ~128 MB cap + write buffer |
+| Chat width | 256 px fixed | configurable |
 
-Windows and Linux are supported. Mac is not supported, as it does not have OpenGL 4.3.
+First join downloads everything once; repeats skip it.
 
-Check out the [Discord server](https://discord.gg/XtqCRRG) for more information and announcements.
+## Install
 
-There are also some devlogs on [YouTube](https://www.youtube.com/playlist?list=PLYi_o2N3ImLb3SIUpTS_AFPWe0MUTk2Lf).
+1. Clone this repo and check out branch `ashframe`.
+2. Build normally (`zig build -Doptimize=ReleaseSafe`).
+3. `git pull` for updates.
+4. Optional `launchConfig.zon` tweaks (defaults work out of the box;
+   our keys are `ashframeCache`, `ashframeServer`,
+   `ashframeCacheTTLHours`, `ashframeFlushMaxMB`,
+   `ashframeFlushIntervalMinutes`, `ashframeCacheMaxMB`,
+   `ashframeReadCacheMB`, `ashframeDebug`, `chatWidth`).
 
-### History
-Until recently (the Zig rewrite was started in August 2022) Cubyz was written in Java. You can still see the code in the [Cubyz-Java](https://github.com/PixelGuys/Cubyz-Java) repository and play it using the [Java Launcher](https://github.com/PixelGuys/Cubyz-Launcher/releases). `// TODO: Move this over to a separate repository`
+## Notes
 
-Originally Cubyz was created on August 22, 2018 by <img src="https://avatars.githubusercontent.com/u/39484230" width="20" height="20">[zenith391](https://github.com/zenith391) and <img src="https://avatars.githubusercontent.com/u/39484479" width="20" height="20">[ZaUserA](https://github.com/ZaUserA). Back then, it was called "Cubz".
-
-However, both of them lost interest at some point, and now Cubyz is maintained by <img src="https://avatars.githubusercontent.com/u/43880493" width="20" height="20">[IntegratedQuantum](https://github.com/IntegratedQuantum).
-
-
-# Run Cubyz
-### This section is about compiling a dev version, if you just want a precompiled version, go to [releases](https://github.com/PixelGuys/Cubyz/releases)
-## The Easy Way (no tools needed)
-1. Download the latest [source code](https://codeload.github.com/PixelGuys/Cubyz/zip/refs/heads/master)
-2. Extract the zip file
-3. Go into the extraced folder and double click the `run_linux.sh` or `run_windows.bat` depending on your operating system.
-4. Congratulations: You just compiled your first program!
-
-### It doesn't work?
-- If it doesn't work and keeps running for more than 10 minutes without doing anything it can help to kill and restart the process. A few people seem to experience this, and I have not found the cause. It might also help to delete the `zig-cache` folder.
-- If you see an error message in the terminal, please report it in the [Issues](https://github.com/PixelGuys/Cubyz/issues) tab or on the [Discord server](https://discord.gg/XtqCRRG).
-- Otherwise you can always ask for help on the Discord server. If you are unable to get it compiling on your machine, you can also ask on the Discord server and we may compile a release for you.
-
-## The Better Way
-1. Install Git
-2. Clone this repository `git clone https://github.com/pixelguys/Cubyz`
-3. Run `run_linux.sh` or `run_windows.bat`, if you already have Zig installed on your computer (it must be a compatible version) you can also just use `zig build run`
-4. When you want to update your local version you can use `git pull`. This keeps everything in one place, avoiding repeatedly downloading the compiler on every update.
-
-# Contributing
-### Code
-Check out the [Contributing Guidelines](https://github.com/PixelGuys/Cubyz/blob/master/docs/CONTRIBUTING.md)
-
-### Gameplay Additions
-Check out the [Game Design Principles](https://github.com/PixelGuys/Cubyz/blob/master/docs/GAME_DESIGN_PRINCIPLES.md)
-
-### Content Additions
-Check out the [Content Guidelines](https://github.com/PixelGuys/Cubyz/blob/master/docs/CONTENT_SUGGESTIONS.md)
+- Fork of [Cubyz](https://github.com/PixelGuys/Cubyz) tag `0.4.1`
+  (GPLv3, see LICENSE).
+- Custom changes marked `ASHFRAME CUSTOM CLIENT` in the source.

@@ -373,16 +373,23 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 		/// caller's own colour applies. Writes into `buf`, returns the
 		/// cleaned slice (or the input unchanged if it didn't fit).
 		fn stripColorCodes(line: []const u8, buf: []u8) []const u8 {
+			// The sign text parser treats a bare '#rrggbb' (shop signs use
+			// this) AND '§'-prefixed codes as colour controls. Strip both so
+			// our own colours win.
 			var len: usize = 0;
 			var i: usize = 0;
 			while (i < line.len) {
 				if (std.mem.startsWith(u8, line[i..], "§")) {
 					i += "§".len;
 					if (i < line.len and line[i] == '#') {
-						i += 7; // #rrggbb
+						i += 7;
 					} else if (i < line.len) {
-						i += 1; // effect char
+						i += 1;
 					}
+					continue;
+				}
+				if (line[i] == '#' and i + 7 <= line.len and isHex6(line[i + 1 .. i + 7])) {
+					i += 7;
 					continue;
 				}
 				if (len >= buf.len) return line; // too long: don't truncate
@@ -391,6 +398,14 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				i += 1;
 			}
 			return buf[0..len];
+		}
+
+		fn isHex6(s: []const u8) bool {
+			if (s.len != 6) return false;
+			for (s) |ch| {
+				if (!std.ascii.isHex(ch)) return false;
+			}
+			return true;
 		}
 
 		/// Draw an item icon as a 2D quad inside the bound sign framebuffer,
@@ -414,22 +429,32 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 		// offscreen pass. So the sign pass is cached-only (iconTextureFor),
 		// and this runs once per frame in the GUI context to generate any
 		// missing icons for items on signs. No-op once cached.
-		var warmReparse: bool = false;
+		/// One-time-per-session pass: undo any sign texture baked by an older
+		// build (before icons / colour stripping), so it rebakes correctly.
+		var rebakedThisSession: bool = false;
 
 		pub fn warmSignIcons() void {
 			if (main.settings.launchConfig.headlessServer) return;
 			if (!main.game.world.?.connected) return;
 			StorageClient.mutex.lock();
 			defer StorageClient.mutex.unlock();
+			// First warm frame of this session: drop all baked sign textures
+			// so stale ones (e.g. the broken slate/smooth sign) redraw.
+			const rebakeAll = !rebakedThisSession;
+			rebakedThisSession = true;
 			for (StorageClient.storage.dense.items) |*signData| {
+				var inval = rebakeAll;
+				if (std.mem.indexOf(u8, signData.text, "[Shop]") == null) inval = false;
 				var it = std.mem.splitScalar(u8, signData.text, '\n');
 				while (it.next()) |line| {
 					const qty = parseQtyLine(line) orelse continue;
 					const item = itemForName(qty.item) orelse continue;
-					if (item.texture() != null) continue; // already cached
-					_ = item.getTexture(); // safe here (GUI pass)
-					// Invalidate the sign's baked texture so the next sign
-					// pass redraws it now that the icon exists.
+					if (item.texture() == null) {
+						_ = item.getTexture(); // safe here (GUI pass)
+						inval = true; // re-bake now the icon exists
+					}
+				}
+				if (inval) {
 					if (signData.renderedTexture) |tex| {
 						textureDeinitLock.lock();
 						defer textureDeinitLock.unlock();
@@ -687,7 +712,10 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				// The ambient translation is already {margin,margin}, so all
 				// render calls below pass (0,0)-relative x/y.
 				const lineH = font;
-				const iconSize: f32 = font + 5;
+				// Keep the icon within one line row: the canvas holds 4 lines
+				// in 64px, so anything taller than the row overlaps the
+				// neighbour icon. font+5 overlapped ~5px.
+				const iconSize: f32 = font;
 				const gap: f32 = 3;
 				const innerW = texW - 2*textureMargin;
 				const isShop = std.mem.indexOf(u8, signData.text, "[Shop]") != null;

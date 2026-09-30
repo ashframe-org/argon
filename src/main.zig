@@ -501,6 +501,10 @@ pub fn clientMain() void { // MARK: clientMain()
 				renderer.updateFov(70.0);
 				renderer.MenuBackGround.render(deltaTime);
 			}
+			// --- ASHFRAME (Argon sign icons): safe to generate block-item
+			// icons here (GUI pass). No-op once cached. ---
+			if (game.world != null) block_entity.BlockEntityTypes.@"cubyz:sign".warmSignIcons();
+			// --- ASHFRAME (Argon sign icons) ---
 			// Render the GUI
 			gui.windowlist.gpu_performance_measuring.startQuery(.gui);
 			gui.updateAndRenderGui();

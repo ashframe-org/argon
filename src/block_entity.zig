@@ -338,16 +338,8 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 		const textureWidth = 128;
 		const textureHeight = 72;
 		const textureMargin = 4;
-		// --- ASHFRAME (Argon large sign + icons): bigger canvas for the
-		// large-sign block; normal signs keep stock dimensions. ---
-		const largeTextureWidth = 256;
-		const largeTextureHeight = 144;
-		const largeFontSize = 30;
+		// --- ASHFRAME (Argon sign icons): stock canvas/font for all signs. ---
 		const stockFontSize = 16;
-
-		fn isLargeSign(block: main.blocks.Block) bool {
-			return std.mem.eql(u8, block.id(), "ashframe:large_sign");
-		}
 
 		/// Resolve a shop-text item name to its item index. Shop signs store
 		/// short ids ("ruby"), so try full id, cubyz-namespaced id, then a
@@ -427,7 +419,7 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			if (item.len == 0) return null;
 			return .{ .prefix = line[0..prefixEnd], .item = item };
 		}
-		// --- ASHFRAME (Argon large sign + icons) ---
+		// --- ASHFRAME (Argon sign icons) ---
 
 		pub fn init() void {
 			StorageServer.init();
@@ -621,73 +613,96 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				// FBO is bound below.
 				pregenerateIcons(signData.text);
 
-				// --- ASHFRAME (Argon large sign): canvas follows block. ---
-				const largeSign = isLargeSign(signData.block);
-				const canvasW: c_int = if (largeSign) largeTextureWidth else textureWidth;
-				const canvasH: c_int = if (largeSign) largeTextureHeight else textureHeight;
-				// --- ASHFRAME (Argon large sign) ---
-
 				var oldViewport: [4]c_int = undefined;
 				c.glGetIntegerv(c.GL_VIEWPORT, &oldViewport);
-				c.glViewport(0, 0, canvasW, canvasH);
+				c.glViewport(0, 0, textureWidth, textureHeight);
 				defer c.glViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
 
 				var finalFrameBuffer: graphics.FrameBuffer = undefined;
 				finalFrameBuffer.init(false, c.GL_NEAREST, c.GL_REPEAT);
-				finalFrameBuffer.updateSize(@intCast(canvasW), @intCast(canvasH), c.GL_RGBA8);
+				finalFrameBuffer.updateSize(textureWidth, textureHeight, c.GL_RGBA8);
 				finalFrameBuffer.bind();
 				finalFrameBuffer.clear(.{0, 0, 0, 0});
 				signData.renderedTexture = .{.textureID = finalFrameBuffer.texture, .vulkanImage = null};
 				defer c.glDeleteFramebuffers(1, &finalFrameBuffer.frameBuffer);
 
-				// --- ASHFRAME (Argon large sign + icons): per-line layout so
-				// quantity lines ("-12x ruby") draw the item icon after the
-				// qty text. Large signs get a bigger canvas + font; normal
-				// signs keep stock dimensions. One-time per sign (cached). ---
-				const large = isLargeSign(signData.block);
-				const texW: f32 = if (large) largeTextureWidth else textureWidth;
-				const texH: f32 = if (large) largeTextureHeight else textureHeight;
-				const font: f32 = if (large) largeFontSize else stockFontSize;
+				// --- ASHFRAME (Argon sign icons): stock canvas + font. ---
+				const texW: f32 = textureWidth;
+				const texH: f32 = textureHeight;
+				const font: f32 = stockFontSize;
 				const oldTranslation = graphics.draw.setTranslation(.{textureMargin, textureMargin});
 				defer graphics.draw.restoreTranslation(oldTranslation);
 				const oldClip = graphics.draw.setClip(.{texW - 2*textureMargin, texH - 2*textureMargin});
 				defer graphics.draw.restoreClip(oldClip);
 
-				// Stock anchors at the top (y=0) advancing one font per line;
-				// centering here pushed content down and clipped it.
+				// --- ASHFRAME (Argon shop-sign rendering) ---
+				// Render line by line so quantity lines can place an item
+				// icon, and colour the "[Shop] ..." header. Non-icon signs
+				// fall through to the stock single-buffer path below to keep
+				// exact multi-line metrics.
 				const lineH = font;
-				var y: f32 = 0;
-				var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
-				while (lineIt.next()) |line| {
-					if (parseQtyLine(line)) |qty| {
-						const iconItem = itemForName(qty.item) orelse null;
-						if (iconItem) |it_| {
-							if (iconTextureFor(it_)) |icon| {
-								var prefixBuf = graphics.TextBuffer.init(main.stackAllocator, qty.prefix, .{.color = 0x000000}, false, .left);
-								defer prefixBuf.deinit();
-								_ = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
-								prefixBuf.renderTextWithoutShadow(textureMargin, y, font);
-								// lineBreaks[0] is a sentinel {width:0}; the real
-								// width of a line is the LAST entry, in font-16
-								// units. (The text renderer is translated by
-								// textureMargin, so the icon sits after the
-								// measured prefix + margin.)
-								const lb = prefixBuf.lineBreaks.items;
-								const prefixW = lb[lb.len - 1].width*(font/16.0);
-								const iconSize: f32 = font;
-								drawIcon(icon, textureMargin + prefixW + 2, y + textureMargin + (lineH - iconSize)/2, iconSize, texW, texH);
-								y += lineH;
-								continue;
+				const iconSize: f32 = font + 5;
+				const gap: f32 = 3;
+				const innerW = texW - 2*textureMargin;
+				var anyIcon = false;
+				{
+					var scan = std.mem.splitScalar(u8, signData.text, '\n');
+					while (scan.next()) |line| {
+						if (parseQtyLine(line)) |qty| {
+							if (itemForName(qty.item)) |it_| {
+								if (iconTextureFor(it_) != null) {
+									anyIcon = true;
+									break;
+								}
 							}
 						}
 					}
-					var lineBuf = graphics.TextBuffer.init(main.stackAllocator, line, .{.color = 0x000000}, false, .center);
-					defer lineBuf.deinit();
-					const lineSize = lineBuf.calculateLineBreaks(font, texW - 2*textureMargin);
-					lineBuf.renderTextWithoutShadow((texW - 2*textureMargin - lineSize[0])/2, y, font);
-					y += lineH;
 				}
-				// --- ASHFRAME (Argon large sign + icons) ---
+				if (anyIcon) {
+					// Each line is centred on its own; quantity lines centre
+					// the text+icon group together.
+					var y: f32 = 0;
+					var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
+					while (lineIt.next()) |line| {
+						const isHeader = std.mem.indexOf(u8, line, "[Shop]") != null;
+						const lineColor: u24 = if (isHeader) 0xe6312c else 0x000000;
+						var handled = false;
+						if (!isHeader) {
+							if (parseQtyLine(line)) |qty| {
+								if (itemForName(qty.item)) |item_| {
+									if (iconTextureFor(item_)) |icon| {
+										var prefixBuf = graphics.TextBuffer.init(main.stackAllocator, qty.prefix, .{.color = lineColor}, false, .left);
+										defer prefixBuf.deinit();
+										_ = prefixBuf.calculateLineBreaks(font, innerW);
+										const lb = prefixBuf.lineBreaks.items;
+										const prefixW = lb[lb.len - 1].width*(font/16.0);
+										const groupW = prefixW + gap + iconSize;
+										const startX = textureMargin + @max(0, (innerW - groupW)/2);
+										prefixBuf.renderTextWithoutShadow(startX, y, font);
+										drawIcon(icon, startX + prefixW + gap, y + textureMargin + (lineH - iconSize)/2, iconSize, texW, texH);
+										handled = true;
+									}
+								}
+							}
+						}
+						if (!handled) {
+							var lineBuf = graphics.TextBuffer.init(main.stackAllocator, line, .{.color = lineColor}, false, .center);
+							defer lineBuf.deinit();
+							const lineSize = lineBuf.calculateLineBreaks(font, innerW);
+							lineBuf.renderTextWithoutShadow(textureMargin + (innerW - lineSize[0])/2, y, font);
+						}
+						y += lineH;
+					}
+				} else {
+					// Plain sign (no icons): stock single-buffer path, which
+					// handles multi-line metrics correctly. Header colour is
+					// skipped here to stay identical to vanilla.
+					var textBuffer = graphics.TextBuffer.init(main.stackAllocator, signData.text, .{.color = 0x000000}, false, .center);
+					defer textBuffer.deinit();
+					_ = textBuffer.calculateLineBreaks(font, innerW);
+					textBuffer.renderTextWithoutShadow(textureMargin, 0, font);
+				}
+				// --- ASHFRAME (Argon shop-sign rendering) ---
 			}
 
 			c.glBindFramebuffer(c.GL_FRAMEBUFFER, @bitCast(oldFramebufferBinding));

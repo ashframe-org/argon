@@ -452,11 +452,13 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 					"",
 					&iconUniforms,
 					graphics.draw.SimpleVertex2D,
-					.{
+					.					{
 						.rasterState = .{.cullMode = .none},
 						.depthStencilState = .{.depthTest = false, .depthWrite = false},
 						.blendState = .{.attachments = &.{.alphaBlending}, .formats = &.{.world}},
 						.inputAssemblyState = .{.topology = .triangleStrip},
+						// 3 x vec2 (start, size, screen) for the Vulkan path.
+						.pushConstantSize = 3*@sizeOf(f32)*2,
 					},
 				);
 				const quadVertices = [_]graphics.draw.SimpleVertex2D{

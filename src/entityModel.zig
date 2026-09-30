@@ -208,9 +208,14 @@ pub const EntityModel = struct { // MARK: EntityModel
 		var nodeDepthRemap: main.List(NodeRemap) = .empty;
 		defer nodeDepthRemap.deinit(main.stackAllocator);
 
+		// --- ASHFRAME CUSTOM CLIENT (flat models): include every node that
+		// either has children OR carries a mesh. Some SKINZ models are a flat
+		// list of mesh nodes with no pivot hierarchy; requiring children
+		// dropped all of them and the model then failed to load (rendering
+		// as a missing-texture cube). ---
 		var nodeIdx: u16 = 0;
 		for (data.nodes, 0..data.nodes_count) |node, gltfNodeIdx| {
-			if (node.children_count == 0) continue;
+			if (node.children_count == 0 and node.mesh == null) continue;
 			nodeDepthRemap.append(main.stackAllocator, .{
 				.depth = getHierarchyDepth(node, 0),
 				.gltfNodeIndex = @intCast(gltfNodeIdx),
@@ -254,7 +259,15 @@ pub const EntityModel = struct { // MARK: EntityModel
 				finalMat = finalMat.mul(Mat4f.rotationQuat(self.coordinateSystem.convertQuat(node.rotation)));
 				finalMat = finalMat.mul(Mat4f.scale(self.coordinateSystem.convertScale(node.scale)));
 
-				const parentNodeID = if (node.parent) |p| self.nodeIndexMap.get(std.mem.span(p.*.name)).? else return error.EntityModelPrimitiveHasNoParent;
+				// A mesh node with no parent is a root (common in flat
+				// models): use the node's own index. Otherwise resolve its
+				// parent; if that name is unknown, fall back to own index so
+				// the model still loads instead of erroring out.
+				const ownIdx = self.nodeIndexMap.get(std.mem.span(node.name));
+				const parentNodeID: u16 = if (node.parent) |p|
+					(self.nodeIndexMap.get(std.mem.span(p.*.name)) orelse ownIdx orelse 0)
+				else
+					(ownIdx orelse 0);
 
 				const primitives = node.mesh.*.primitives;
 				for (primitives[0..node.mesh.*.primitives_count]) |primitive| {

@@ -34,9 +34,13 @@ pub fn run(_: *anyopaque, params: main.callbacks.ClientBlockCallback.Params) mai
 			const chest: Vec3i = .{ params.blockPos[0] + off[0], params.blockPos[1] + off[1], params.blockPos[2] + off[2] };
 			if (main.renderer.mesh_storage.getBlockFromRenderThread(chest[0], chest[1], chest[2])) |chestBlock| {
 				if (chestBlock.blockEntity() != null and std.mem.eql(u8, chestBlock.blockEntity().?.id, "cubyz:chest")) {
-					// Ask the server to open the shop at this chest (customer
-					// -> buy menu, owner -> chest, no shop -> normal open).
-					main.network.protocols.blockEntityUpdate.sendClientDataUpdateToServer(main.game.world.?.conn, chest);
+					// Do exactly what clicking the chest does: the server opens
+					// the shared inventory. For a customer of a shop that is
+					// the green/red buy menu; otherwise the normal chest opens.
+					const inventory = main.items.Inventory.ClientInventory.init(main.globalAllocator, main.block_entity.BlockEntityTypes.@"cubyz:chest".inventorySize, .serverShared, .{.blockInventory = chest}, .{});
+					main.gui.windowlist.chest.setInventory(inventory);
+					main.gui.openWindow("chest");
+					main.Window.setMouseGrabbed(false);
 					return .handled;
 				}
 			}

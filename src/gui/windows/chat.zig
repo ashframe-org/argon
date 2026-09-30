@@ -175,7 +175,7 @@ fn chatWidth() f32 {
 // --- ASHFRAME CUSTOM CLIENT ---
 
 pub fn onOpen() void {
-	input = TextInput.init(.{0, 0}, chatWidth(), 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry), .onTab = .init(completeCommand)});
+	input = TextInput.init(.{0, 0}, chatWidth(), 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry), .onTab = .init(completeCommand), .onUpdate = .init(refreshGhost)});
 	refresh();
 }
 
@@ -269,41 +269,121 @@ const commandNames = [_][]const u8{
 	"copy",       "count",    "paste",    "blueprint", "rotate",   "set",      "mask",      "replace",  "toggledecay",
 };
 
-/// Called on Tab while the chat input is focused. If the input is a command
-/// (`/...`) and the first word is an unambiguous prefix, complete it.
-fn completeCommand() void {
+/// The completion that would be applied for the current input, or "" when
+/// there is nothing unambiguous to add. Used both for the gray ghost hint
+/// and for Tab.
+/// Returns the FULL completed string (e.g. "/alliance" or "@Bob") or "".
+fn currentCompletion(out: *[128]u8) []const u8 {
 	const text = input.currentString.items;
-	if (text.len == 0 or text[0] != '/') return;
-	const body = text[1..];
-	const end = std.mem.indexOfScalar(u8, body, ' ') orelse body.len;
-	if (end == 0) return; // just "/": nothing to complete
-	const word = body[0..end];
-	// Only complete the command word (leave arguments alone for now).
-	if (end != body.len) return;
-	var match: ?[]const u8 = null;
+	if (text.len == 0) return "";
+	// 1) Command completion: "/prefix" as the first word.
+	if (text[0] == '/') {
+		const body = text[1..];
+		if (std.mem.indexOfScalar(u8, body, ' ') != null) return "";
+		if (body.len == 0) return "";
+		var match: ?[]const u8 = null;
+		var count: usize = 0;
+		for (commandNames) |cmd| {
+			if (std.mem.startsWith(u8, cmd, body)) {
+				match = cmd;
+				count += 1;
+			}
+		}
+		if (count != 1) return "";
+		return std.fmt.bufPrint(out, "/{s}", .{match.?}) catch "";
+	}
+	// 2) @name completion: the current word starts with '@'.
+	const wordStart = (std.mem.lastIndexOfScalar(u8, text, ' ') orelse 0);
+	const wordStartAdj = if (wordStart == 0 and text[0] != ' ') 0 else wordStart + 1;
+	const word = text[wordStartAdj..];
+	if (word.len < 1 or word[0] != '@') return "";
+	const prefix = word[1..];
+	if (prefix.len == 0) return "";
+	var name: ?[]const u8 = null;
 	var count: usize = 0;
-	for (commandNames) |cmd| {
-		if (std.mem.startsWith(u8, cmd, word)) {
-			match = cmd;
+	var it = playerNames();
+	while (it.next()) |n| {
+		if (std.ascii.startsWithIgnoreCase(n, prefix)) {
+			name = n;
 			count += 1;
 		}
 	}
-	if (count == 1) {
-		const completed = main.stackAllocator.print("/{s}", .{match.?});
-		defer main.stackAllocator.free(completed);
-		input.setString(completed);
-	} else if (count > 1) {
-		// Ambiguous: list the options in chat so the player can narrow down.
-		var list: main.ListManaged(u8) = .init(main.stackAllocator);
-		defer list.deinit();
-		list.appendSlice("#8a8a8aCommands: #cfcfcf");
-		for (commandNames) |cmd| {
-			if (!std.mem.startsWith(u8, cmd, word)) continue;
-			list.appendSlice(cmd);
-			list.append(' ');
+	it.deinit();
+	if (count != 1) return "";
+	const head = text[0..wordStartAdj];
+	return std.fmt.bufPrint(out, "{s}@{s}", .{ head, name.? }) catch "";
+}
+
+/// Online player names (display names, colour codes stripped) for @completion.
+const PlayerNames = struct {
+	i: usize = 0,
+	lockHeld: bool = false,
+	buf: [128]u8 = undefined,
+
+	fn next(self: *PlayerNames) ?[]const u8 {
+		if (!self.lockHeld) {
+			main.client.entity_manager.mutex.lock();
+			self.lockHeld = true;
 		}
-		addMessage(list.items);
+		const ents = main.client.entity_manager.entities.items();
+		while (self.i < ents.len) {
+			const e = ents[self.i];
+			self.i += 1;
+			if (e.name.len == 0) continue;
+			var n: usize = 0;
+			var j: usize = 0;
+			while (j < e.name.len and n < self.buf.len) {
+				if (std.mem.startsWith(u8, e.name[j..], "§")) {
+					j += "§".len;
+					if (j < e.name.len and e.name[j] == '#') j += 7 else if (j < e.name.len) j += 1;
+					continue;
+				}
+				self.buf[n] = e.name[j];
+				n += 1;
+				j += 1;
+			}
+			if (n == 0 or std.mem.eql(u8, self.buf[0..n], main.settings.playerName)) continue;
+			return self.buf[0..n];
+		}
+		return null;
 	}
+
+	fn deinit(self: *PlayerNames) void {
+		if (self.lockHeld) {
+			main.client.entity_manager.mutex.unlock();
+			self.lockHeld = false;
+		}
+	}
+};
+
+fn playerNames() PlayerNames {
+	return .{};
+}
+
+/// Refresh the gray ghost hint from the current input. Called whenever the
+/// input text changes.
+pub fn refreshGhost() void {
+	var out: [128]u8 = undefined;
+	const completion = currentCompletion(&out);
+	if (completion.len == 0 or completion.len <= input.currentString.items.len) {
+		input.ghost = "";
+		return;
+	}
+	// Ghost is only the part not yet typed.
+	const tail = completion[input.currentString.items.len..];
+	@memcpy(input.ghostBuf[0..tail.len], tail);
+	input.ghost = input.ghostBuf[0..tail.len];
+}
+
+/// Called on Tab. Applies the completion (command or @name).
+fn completeCommand() void {
+	var out: [128]u8 = undefined;
+	const completion = currentCompletion(&out);
+	if (completion.len == 0) return;
+	const owned = main.globalAllocator.dupe(u8, completion);
+	defer main.globalAllocator.free(owned);
+	input.setString(owned);
+	refreshGhost();
 }
 // --- ASHFRAME CUSTOM CLIENT ---
 

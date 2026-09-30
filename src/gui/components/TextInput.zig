@@ -35,8 +35,12 @@ maxHeight: f32,
 textSize: Vec2f = undefined,
 scrollBar: *ScrollBar,
 options: Options,
-lastBlinkTime: std.Io.Timestamp = .fromNanoseconds(0),
-showCursor: bool = true,
+	lastBlinkTime: std.Io.Timestamp = .fromNanoseconds(0),
+	showCursor: bool = true,
+	// --- ASHFRAME CUSTOM CLIENT: gray inline completion hint (e.g. command
+	// autocomplete). Purely visual; never part of currentString. ---
+	ghost: []const u8 = "",
+	ghostBuf: [128]u8 = undefined,
 
 pub fn globalInit() void {
 	texture = Texture.initFromFile("assets/cubyz/ui/text_input.png");
@@ -562,6 +566,17 @@ pub fn render(self: *TextInput, mousePosition: Vec2f) void {
 	const textColor = draw.setColor(if (self.options.disabled) 0xff808080 else 0xffffffff);
 	defer draw.restoreColor(textColor);
 	textBuffer.render(textPos[0], textPos[1], fontSize);
+	// --- ASHFRAME CUSTOM CLIENT: gray ghost completion after the text. ---
+	if (self.ghost.len != 0 and self.cursor != null and self.cursor.? == self.currentString.items.len) {
+		const ghostColor = draw.setColor(0xff888888);
+		defer draw.restoreColor(ghostColor);
+		const lineStart = textBuffer.indexToCursorPos(@intCast(self.currentString.items.len));
+		var ghostLabel = TextBuffer.init(main.stackAllocator, self.ghost, .{.color = 0x888888}, true, .left);
+		defer ghostLabel.deinit();
+		_ = ghostLabel.calculateLineBreaks(fontSize, self.maxWidth);
+		ghostLabel.render(textPos[0] + lineStart[0], textPos[1] + lineStart[1], fontSize);
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 	if (self.pressed) {
 		self.cursor = self.textBuffer.mousePosToIndex(mousePosition - textPos - self.pos, self.currentString.items.len);
 	}

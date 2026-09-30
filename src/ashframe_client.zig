@@ -41,6 +41,15 @@ pub fn noteDialAddress(ip: []const u8) void {
 	timeSynced.store(false, .release);
 	if (dialAddress) |old| main.globalAllocator.free(old);
 	dialAddress = main.globalAllocator.dupe(u8, ip);
+	// Load this server's LRU access index (new dial = different cache dir).
+	accessClear();
+	var dirBuf: [256]u8 = undefined;
+	const dirPath = cacheDir(&dirBuf);
+	if (main.files.cubyzDir().openDir(dirPath)) |d| {
+		var dd = d;
+		loadAccessIndex(&dd);
+		dd.close();
+	} else |_| {}
 	timingReset();
 }
 
@@ -82,6 +91,16 @@ pub fn sessionEnd() void {
 	prefetchGen +%= 1;
 	readClear();
 	missClear();
+	clearNoPersist();
+	// Persist the LRU access index for next session.
+	var dirBuf: [256]u8 = undefined;
+	const dirPath = cacheDir(&dirBuf);
+	if (main.files.cubyzDir().openDir(dirPath)) |d| {
+		var dd = d;
+		saveAccessIndex(&dd);
+		dd.close();
+	} else |_| {}
+	accessClear();
 }
 
 /// Master toggle on, live session, and dialed address matches Ashframe.
@@ -608,21 +627,65 @@ fn maybeSweep(dirPath: []const u8) void {
 	}
 	const cap = cacheMaxBytes();
 	if (total <= cap) return;
-	var rng: u64 = @as(u64, @intCast(main.timestamp().toNanoseconds())) | 0x9e3779b97f4a7c15;
-	var over: u64 = total - cap*4/5;
-	var i: usize = entries.items.len;
-	while (i > 0 and over > 0) {
-		rng ^= rng << 13;
-		rng ^= rng >> 7;
-		rng ^= rng << 17;
-		const victim = rng % i;
-		i -= 1;
-		const tmp = entries.items[victim];
-		entries.items[victim] = entries.items[i];
-		entries.items[i] = tmp;
-		over -= @min(over, tmp.size);
-		dir.deleteFile(tmp.name) catch {};
+	// --- ASHFRAME CUSTOM CLIENT (LRU + LOD eviction) ---
+	// Evict the COLDEST regions first (by last-access time), so spawn/near
+	// chunks a player revisits survive a deep-cave excursion. Tie-break by
+	// LOD: among equally-cold regions, drop the COARSEST (largest voxelSize)
+	// first — high-res data is bulkier and only mattered when near.
+	// Regions never seen in the access index get time 0 (evicted first).
+	const Evict = struct {
+		name: []u8,
+		size: u64,
+		lastAccess: i64,
+		lod: u32,
+	};
+	var list: main.ListManaged(Evict) = .init(main.globalAllocator);
+	defer list.deinit();
+	for (entries.items) |e| {
+		list.append(.{
+			.name = e.name,
+			.size = e.size,
+			.lastAccess = accessTimeOf(e.name),
+			.lod = lodOfRegionName(e.name),
+		});
 	}
+	std.mem.sort(Evict, list.items, {}, struct {
+		fn lt(_: void, a: Evict, b: Evict) bool {
+			if (a.lastAccess != b.lastAccess) return a.lastAccess < b.lastAccess; // oldest first
+			return a.lod > b.lod; // then coarsest LOD first
+		}
+	}.lt);
+	var over: u64 = total - cap*4/5;
+	var i: usize = 0;
+	while (i < list.items.len and over > 0) : (i += 1) {
+		dir.deleteFile(list.items[i].name) catch {};
+		accessRemove(list.items[i].name);
+		over -= @min(over, list.items[i].size);
+	}
+	// --- ASHFRAME CUSTOM CLIENT (LRU + LOD eviction) ---
+}
+
+/// Last-access time of a region file (0 if unknown).
+fn accessTimeOf(regionPath: []const u8) i64 {
+	accessMutex.lock();
+	defer accessMutex.unlock();
+	return accessMap.get(regionPath) orelse 0;
+}
+
+fn accessRemove(regionPath: []const u8) void {
+	accessMutex.lock();
+	defer accessMutex.unlock();
+	if (accessMap.fetchRemove(regionPath)) |kv| {
+		main.globalAllocator.free(kv.key);
+		accessDirty = true;
+	}
+}
+
+/// LOD (last underscore-separated number) of a region file name; 0 if none.
+fn lodOfRegionName(name: []const u8) u32 {
+	const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse name.len;
+	const us = std.mem.lastIndexOfScalar(u8, name[0..dot], '_') orelse return 0;
+	return std.fmt.parseInt(u32, name[us + 1 .. dot], 10) catch 0;
 }
 
 // --- ASHFRAME CUSTOM CLIENT: RAM write buffer. ---
@@ -695,12 +758,148 @@ fn ramClear() void {
 	ramBytes = 0;
 }
 
+// --- ASHFRAME CUSTOM CLIENT: access index + one-shot filter (LRU eviction) ---
+// The disk cache is bounded, so what gets evicted matters: random eviction
+// dropped the chunks a player actually revisits (spawn) as readily as
+// one-shot deep-cave chunks. We instead track, per REGION FILE, the last
+// time it was read (LRU) so eviction drops the coldest first. Persisted in
+// a compact sidecar so ordering survives restarts.
+//
+// One-shot filter: a chunk that has only ever been loaded once (flown past
+// / fallen through) is not worth persisting. We keep a small in-RAM count
+// of how many times each blob has been requested; a blob is only staged to
+// the write buffer once it has been requested at least twice. This stops
+// deep-hole excursions from polluting the disk cache at all.
+var accessMutex: main.utils.Mutex = .{};
+var accessMap: std.StringHashMapUnmanaged(i64) = .empty; // regionPath -> last access ms
+var accessDirty: bool = false;
+var seenMutex: main.utils.Mutex = .{};
+var seenOnce: std.StringHashMapUnmanaged(void) = .empty; // names requested once
+
+fn accessCapEntries() usize {
+	return 8192;
+}
+
+/// Record that `regionPath` was just read. Cheap; called per region access.
+fn accessTouch(regionPath: []const u8) void {
+	accessMutex.lock();
+	defer accessMutex.unlock();
+	const now = main.timestamp().toMilliseconds();
+	if (accessMap.getPtr(regionPath)) |slot| {
+		slot.* = now;
+	} else {
+		const key = main.globalAllocator.dupe(u8, regionPath);
+		accessMap.put(main.globalAllocator.allocator, key, now) catch {
+			main.globalAllocator.free(key);
+			return;
+		};
+		accessDirty = true;
+	}
+	accessDirty = true;
+}
+
+/// Returns true the FIRST time `name` is seen, false on later calls. Used by
+/// the one-shot filter (only stage to disk after the second request).
+fn seenFirstTime(name: []const u8) bool {
+	seenMutex.lock();
+	defer seenMutex.unlock();
+	if (seenOnce.contains(name)) return false;
+	const key = main.globalAllocator.dupe(u8, name);
+	seenOnce.put(main.globalAllocator.allocator, key, {}) catch {
+		main.globalAllocator.free(key);
+		return false;
+	};
+	if (seenOnce.count() > 65536) {
+		// Bounded: clear wholesale (rare; the filter is an optimisation).
+		var it = seenOnce.iterator();
+		while (it.next()) |kv| main.globalAllocator.free(kv.key_ptr.*);
+		seenOnce.clearRetainingCapacity();
+	}
+	return true;
+}
+
+/// Names staged this session that should NOT be written to disk (seen only
+/// once). Kept in RAM so the current session still serves them.
+var noPersist: std.StringHashMapUnmanaged(void) = .empty;
+
+fn markNoPersist(name: []const u8) void {
+	seenMutex.lock();
+	defer seenMutex.unlock();
+	const key = main.globalAllocator.dupe(u8, name);
+	noPersist.put(main.globalAllocator.allocator, key, {}) catch main.globalAllocator.free(key);
+}
+
+fn isNoPersist(name: []const u8) bool {
+	seenMutex.lock();
+	defer seenMutex.unlock();
+	return noPersist.contains(name);
+}
+
+fn clearNoPersist() void {
+	seenMutex.lock();
+	defer seenMutex.unlock();
+	var it = noPersist.iterator();
+	while (it.next()) |kv| main.globalAllocator.free(kv.key_ptr.*);
+	noPersist.clearRetainingCapacity();
+}
+
+fn accessClear() void {
+	accessMutex.lock();
+	defer accessMutex.unlock();
+	var it = accessMap.iterator();
+	while (it.next()) |kv| main.globalAllocator.free(kv.key_ptr.*);
+	accessMap.clearRetainingCapacity();
+	accessDirty = false;
+	seenMutex.lock();
+	var it2 = seenOnce.iterator();
+	while (it2.next()) |kv| main.globalAllocator.free(kv.key_ptr.*);
+	seenOnce.clearRetainingCapacity();
+	seenMutex.unlock();
+}
+
+/// Sidecar file "access.zon": regionPath -> lastAccessMs. Written at flush
+/// time (rare), read once per session. Keeps LRU effective across restarts.
+const accessFileName = "access.zon";
+
+fn loadAccessIndex(dir: *main.files.Dir) void {
+	const zon = dir.readToZon(main.stackAllocator, accessFileName) catch return;
+	defer zon.deinit(main.stackAllocator);
+	for (zon.toSlice()) |entry| {
+		const key = entry.get([]const u8, "r") orelse continue;
+		const ts = entry.get(i64, "t") orelse continue;
+		const k = main.globalAllocator.dupe(u8, key);
+		accessMap.put(main.globalAllocator.allocator, k, ts) catch main.globalAllocator.free(k);
+	}
+}
+
+fn saveAccessIndex(dir: *main.files.Dir) void {
+	accessMutex.lock();
+	defer accessMutex.unlock();
+	if (!accessDirty) return;
+	var arr = main.ZonElement.initArray(main.stackAllocator);
+	var it = accessMap.iterator();
+	while (it.next()) |kv| {
+		var o = main.ZonElement.initObject(main.stackAllocator);
+		o.put("r", kv.key_ptr.*);
+		o.put("t", kv.value_ptr.*);
+		arr.array.append(o);
+	}
+	var obj = main.ZonElement.initObject(main.stackAllocator);
+	defer obj.deinit(main.stackAllocator);
+	obj.put("regions", arr);
+	dir.writeZon(accessFileName, obj) catch {};
+	accessDirty = false;
+}
+// --- ASHFRAME CUSTOM CLIENT (access index) ---
+
 /// In-RAM read cache: blobs served from here never touch disk. Populated
 /// on every disk hit and every network store; cleared on session end and
 /// warmed by prefetch on connect. Bounded (arbitrary eviction to 4/5 cap).
 var readMutex: main.utils.Mutex = .{};
-var readCache: std.StringHashMapUnmanaged([]u8) = .empty;
+const ReadEntry = struct { data: []u8, lastUse: i64 };
+var readCache: std.StringHashMapUnmanaged(ReadEntry) = .empty;
 var readBytes: usize = 0;
+var readTick: i64 = 0;
 
 fn readCapBytes() usize {
 	return @as(usize, main.settings.launchConfig.ashframeReadCacheMB)*1024*1024;
@@ -709,43 +908,56 @@ fn readCapBytes() usize {
 fn readGet(name: []const u8) ?[]u8 {
 	readMutex.lock();
 	defer readMutex.unlock();
-	const blob = readCache.get(name) orelse return null;
-	return main.globalAllocator.dupe(u8, blob);
+	const slot = readCache.getPtr(name) orelse return null;
+	readTick += 1;
+	slot.lastUse = readTick; // LRU touch
+	return main.globalAllocator.dupe(u8, slot.data);
 }
 
 fn readPut(name: []const u8, data: []const u8) void {
 	readMutex.lock();
 	defer readMutex.unlock();
 	const gpa = main.globalAllocator;
+	readTick += 1;
 	if (readCache.getPtr(name)) |slot| {
-		readBytes -= slot.*.len;
-		gpa.free(slot.*);
-		slot.* = gpa.dupe(u8, data);
-		readBytes += slot.*.len;
+		readBytes -= slot.data.len;
+		gpa.free(slot.data);
+		slot.data = gpa.dupe(u8, data);
+		slot.lastUse = readTick;
+		readBytes += slot.data.len;
 	} else {
 		const key = gpa.dupe(u8, name);
 		const val = gpa.dupe(u8, data);
-		readCache.put(gpa.allocator, key, val) catch {
+		readCache.put(gpa.allocator, key, .{ .data = val, .lastUse = readTick }) catch {
 			gpa.free(key);
 			gpa.free(val);
 			return;
 		};
 		readBytes += val.len;
 	}
-	// Arbitrary eviction down to 4/5 of cap (hash order ~ random).
 	const cap = readCapBytes();
 	if (cap == 0) {
 		readClearLocked();
 		return;
 	}
+	// LRU eviction down to 4/5 of cap: drop the least-recently-used entry.
+	// Near working set is small, so this keeps hot blobs (spawn) resident.
 	const target = cap*4/5;
 	while (readBytes > target) {
+		var victim: ?[]const u8 = null;
+		var oldest: i64 = std.math.maxInt(i64);
 		var it = readCache.iterator();
-		const kv = it.next() orelse break;
-		const gone = readCache.fetchRemove(kv.key_ptr.*) orelse break;
-		readBytes -= gone.value.len;
+		while (it.next()) |kv| {
+			if (kv.value_ptr.lastUse < oldest) {
+				oldest = kv.value_ptr.lastUse;
+				victim = kv.key_ptr.*;
+			}
+		}
+		const v = victim orelse break;
+		const gone = readCache.fetchRemove(v) orelse break;
+		readBytes -= gone.value.data.len;
 		gpa.free(gone.key);
-		gpa.free(gone.value);
+		gpa.free(gone.value.data);
 	}
 }
 
@@ -753,16 +965,16 @@ fn readRemove(name: []const u8) void {
 	readMutex.lock();
 	defer readMutex.unlock();
 	const kv = readCache.fetchRemove(name) orelse return;
-	readBytes -= kv.value.len;
+	readBytes -= kv.value.data.len;
 	main.globalAllocator.free(kv.key);
-	main.globalAllocator.free(kv.value);
+	main.globalAllocator.free(kv.value.data);
 }
 
 fn readClearLocked() void {
 	var it = readCache.iterator();
 	while (it.next()) |kv| {
 		main.globalAllocator.free(kv.key_ptr.*);
-		main.globalAllocator.free(kv.value_ptr.*);
+		main.globalAllocator.free(kv.value_ptr.data);
 	}
 	readCache.clearRetainingCapacity();
 	readBytes = 0;
@@ -866,6 +1078,8 @@ fn flushRam(force: bool) void {
 		while (flushIt.next()) |kv| {
 			const key = kv.key_ptr.*;
 			const val = kv.value_ptr.*;
+			// One-shot filter: skip persisting blobs seen only once.
+			if (isNoPersist(key)) continue;
 			if (parseChunkName(key)) |pc| {
 				const s = chunkSpan(pc.vs);
 				work.append(.{
@@ -989,6 +1203,8 @@ pub fn endServeBatch() void {
 /// upstream). In-batch serves share one dir handle plus the per-pass
 /// region cache; outside a batch it's open+close. Caller owns the memory.
 fn loadRegionBlob(dirPath: []const u8, regionPath: []const u8, n: usize, slot: usize) ?[]u8 {
+	// LRU: record this region as recently used (drives eviction order).
+	accessTouch(regionPath);
 	if (batchDir) |d| {
 		batchBlobs += 1;
 		return batchRegionSlot(d, regionPath, n, slot);
@@ -1005,6 +1221,10 @@ pub fn storeChunk(pos: main.chunk.ChunkPosition, data: []const u8) void {
 	if (!isActive()) return;
 	var nameBuf: [128]u8 = undefined;
 	const name = chunkFileName(pos, &nameBuf);
+	// One-shot filter: a chunk requested only once this session stays in RAM
+	// (serves the current session) but is not persisted — deep-cave chunks
+	// you'll never revisit don't pollute the disk cache.
+	if (seenFirstTime(name)) markNoPersist(name);
 	stageBlob(name, data);
 	missClearEntry(name);
 }
@@ -1072,6 +1292,7 @@ pub fn storeLightMap(wx: i32, wy: i32, vs: u31, data: []const u8) void {
 	if (!isActive()) return;
 	var nameBuf: [128]u8 = undefined;
 	const name = lightMapFileName(wx, wy, vs, &nameBuf);
+	if (seenFirstTime(name)) markNoPersist(name);
 	stageBlob(name, data);
 	missClearEntry(name);
 }

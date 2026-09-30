@@ -269,6 +269,24 @@ const commandNames = [_][]const u8{
 	"copy",       "count",    "paste",    "blueprint", "rotate",   "set",      "mask",      "replace",  "toggledecay",
 };
 
+/// First-argument suggestions per command (subcommands). Mirrors the server's
+/// arg enums; used to complete the second word, e.g. "/shop s" -> sell.
+const ArgList = struct { cmd: []const u8, args: []const []const u8 };
+const commandArgs = [_]ArgList{
+	.{ .cmd = "gamemode", .args = &.{ "survival", "creative" } },
+	.{ .cmd = "shop", .args = &.{ "sell", "buy" } },
+	.{ .cmd = "claim", .args = &.{ "list", "info", "members", "abandon", "remove", "show", "trust", "untrust", "accept", "deny" } },
+	.{ .cmd = "alliance", .args = &.{ "create", "join", "leave", "disband", "info", "list", "invite", "kick" } },
+	.{ .cmd = "waypoint", .args = &.{ "inventory", "chat" } },
+	.{ .cmd = "time", .args = &.{ "day", "dusk", "night", "dawn" } },
+	.{ .cmd = "titles", .args = &.{ "list" } },
+	.{ .cmd = "title", .args = &.{ "clear" } },
+	.{ .cmd = "perm", .args = &.{ "allow", "deny" } },
+	.{ .cmd = "avatar", .args = &.{ "world" } },
+	.{ .cmd = "group", .args = &.{ "create", "add", "remove", "list" } },
+	.{ .cmd = "veteran", .args = &.{ "list" } },
+};
+
 /// The completion that would be applied for the current input, or "" when
 /// there is nothing unambiguous to add. Used both for the gray ghost hint
 /// and for Tab.
@@ -279,7 +297,27 @@ fn currentCompletion(out: *[128]u8) []const u8 {
 	// 1) Command completion: "/prefix" as the first word.
 	if (text[0] == '/') {
 		const body = text[1..];
-		if (std.mem.indexOfScalar(u8, body, ' ') != null) return "";
+		if (std.mem.indexOfScalar(u8, body, ' ')) |sp| {
+			// Second word: complete a known command's subcommands.
+			const cmdWord = body[0..sp];
+			const arg = body[sp + 1 ..];
+			if (std.mem.indexOfScalar(u8, arg, ' ') != null) return "";
+			if (arg.len == 0) return "";
+			for (commandArgs) |entry| {
+				if (!std.mem.eql(u8, entry.cmd, cmdWord)) continue;
+				var match: ?[]const u8 = null;
+				var count: usize = 0;
+				for (entry.args) |a| {
+					if (std.mem.startsWith(u8, a, arg)) {
+						match = a;
+						count += 1;
+					}
+				}
+				if (count != 1) return "";
+				return std.fmt.bufPrint(out, "/{s} {s}", .{ cmdWord, match.? }) catch "";
+			}
+			return "";
+		}
 		if (body.len == 0) return "";
 		var match: ?[]const u8 = null;
 		var count: usize = 0;
@@ -290,7 +328,7 @@ fn currentCompletion(out: *[128]u8) []const u8 {
 			}
 		}
 		if (count != 1) return "";
-		return std.fmt.bufPrint(out, "/{s}", .{match.?}) catch "";
+		return std.fmt.bufPrint(out, "/{s} ", .{match.?}) catch "";
 	}
 	// 2) @name completion: the current word starts with '@'.
 	const wordStart = (std.mem.lastIndexOfScalar(u8, text, ' ') orelse 0);

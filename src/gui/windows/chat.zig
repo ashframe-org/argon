@@ -299,19 +299,33 @@ fn currentCompletion(out: *[128]u8) []const u8 {
 	if (word.len < 1 or word[0] != '@') return "";
 	const prefix = word[1..];
 	if (prefix.len == 0) return "";
-	var name: ?[]const u8 = null;
+	// Match by prefix; copy the winner out immediately (the iterator's
+	// buffer is reused each next()).
+	var matched: [128]u8 = undefined;
+	var matchedLen: usize = 0;
 	var count: usize = 0;
 	var it = playerNames();
 	while (it.next()) |n| {
-		if (std.ascii.startsWithIgnoreCase(n, prefix)) {
-			name = n;
-			count += 1;
+		if (n.len == 0 or !std.ascii.startsWithIgnoreCase(n, prefix)) continue;
+		count += 1;
+		if (count == 1) {
+			const c = @min(n.len, matched.len);
+			@memcpy(matched[0..c], n[0..c]);
+			matchedLen = c;
 		}
 	}
 	it.deinit();
 	if (count != 1) return "";
 	const head = text[0..wordStartAdj];
-	return std.fmt.bufPrint(out, "{s}@{s}", .{ head, name.? }) catch "";
+	return std.fmt.bufPrint(out, "{s}@{s} ", .{ head, matched[0..matchedLen] }) catch "";
+}
+
+fn isHex6(s: []const u8) bool {
+	if (s.len != 6) return false;
+	for (s) |ch| {
+		if (!std.ascii.isHex(ch)) return false;
+	}
+	return true;
 }
 
 /// Online player names (display names, colour codes stripped) for @completion.
@@ -330,12 +344,18 @@ const PlayerNames = struct {
 			const e = ents[self.i];
 			self.i += 1;
 			if (e.name.len == 0) continue;
+			// Strip BOTH §#rrggbb and a bare #rrggbb prefix (Ashframe names
+			// use the bare form, e.g. "#ff8888Name").
 			var n: usize = 0;
 			var j: usize = 0;
 			while (j < e.name.len and n < self.buf.len) {
 				if (std.mem.startsWith(u8, e.name[j..], "§")) {
 					j += "§".len;
 					if (j < e.name.len and e.name[j] == '#') j += 7 else if (j < e.name.len) j += 1;
+					continue;
+				}
+				if (e.name[j] == '#' and j + 7 <= e.name.len and isHex6(e.name[j + 1 .. j + 7])) {
+					j += 7;
 					continue;
 				}
 				self.buf[n] = e.name[j];

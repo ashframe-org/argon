@@ -588,7 +588,9 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
 				while (lineIt.next()) |_| lineCount += 1;
 				if (lineCount == 0) lineCount = 1;
-				const lineH = font*1.25;
+				// Stock advances exactly one font per line (y += 16 @
+				// font 16); anything larger overflows the canvas.
+				const lineH = font;
 				var y = (texH - 2*textureMargin - @as(f32, @floatFromInt(lineCount))*lineH)/2;
 				if (y < 0) y = 0;
 				lineIt = std.mem.splitScalar(u8, signData.text, '\n');

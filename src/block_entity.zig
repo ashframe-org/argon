@@ -338,32 +338,43 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			return std.mem.eql(u8, block.id(), "ashframe:large_sign");
 		}
 
-		/// Resolve a shop-text item name to its icon texture. Shop signs
-		/// store short ids ("ruby"), so try full id, cubyz-namespaced id,
-		/// then a case-insensitive short-id scan. Uses the generating
-		/// accessor: the raw texture field is null until first generated,
-		/// which is why icons never appeared. Null = draw the name.
-		fn iconForItem(name: []const u8) ?main.graphics.Texture {
-			if (main.items.BaseItemIndex.fromId(name)) |item| {
-				return item.getTexture();
-			}
+		/// Resolve a shop-text item name to its item index. Shop signs store
+		/// short ids ("ruby"), so try full id, cubyz-namespaced id, then a
+		/// case-insensitive short-id scan. No GPU work here.
+		fn itemForName(name: []const u8) ?main.items.BaseItemIndex {
+			if (main.items.BaseItemIndex.fromId(name)) |item| return item;
 			var nsBuf: [128]u8 = undefined;
 			const namespaced = std.fmt.bufPrint(&nsBuf, "cubyz:{s}", .{name}) catch null;
 			if (namespaced) |ns| {
-				if (main.items.BaseItemIndex.fromId(ns)) |item| {
-					return item.getTexture();
-				}
+				if (main.items.BaseItemIndex.fromId(ns)) |item| return item;
 			}
 			var i: u16 = 0;
 			while (i < main.items.itemListSize) : (i += 1) {
 				const item: main.items.BaseItemIndex = @enumFromInt(i);
 				const id = item.id();
 				const short = if (std.mem.indexOfScalar(u8, id, ':')) |colon| id[colon + 1 ..] else id;
-				if (std.ascii.eqlIgnoreCase(short, name)) {
-					return item.getTexture();
-				}
+				if (std.ascii.eqlIgnoreCase(short, name)) return item;
 			}
 			return null;
+		}
+
+		/// The already-generated icon texture for an item, or null if it has
+		/// not been generated yet. Read-only: must NOT generate here.
+		fn iconTextureFor(item: main.items.BaseItemIndex) ?main.graphics.Texture {
+			return item.texture();
+		}
+
+		/// Pre-generate icons for every qty-line item in `text`, BEFORE the
+		/// sign framebuffer is bound. getTexture() runs GPU work (binds its
+		/// own FBO + viewport), so calling it mid-pass clobbered the sign
+		/// render — icons silently vanished. Generate once up front.
+		fn pregenerateIcons(text: []const u8) void {
+			var it = std.mem.splitScalar(u8, text, '\n');
+			while (it.next()) |line| {
+				const qty = parseQtyLine(line) orelse continue;
+				const item = itemForName(qty.item) orelse continue;
+				_ = item.getTexture();
+			}
 		}
 
 		/// Split a shop quantity line ("-12x amber_ore", color codes kept)
@@ -553,6 +564,11 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			for (StorageClient.storage.dense.items) |*signData| {
 				if (signData.renderedTexture != null) continue;
 
+				// Generate any needed item icons first: that rebinds the
+				// framebuffer/viewport, so it must happen before the sign
+				// FBO is bound below.
+				pregenerateIcons(signData.text);
+
 				// --- ASHFRAME (Argon large sign): canvas follows block. ---
 				const largeSign = isLargeSign(signData.block);
 				const canvasW: c_int = if (largeSign) largeTextureWidth else textureWidth;
@@ -592,15 +608,20 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
 				while (lineIt.next()) |line| {
 					if (parseQtyLine(line)) |qty| {
-						if (iconForItem(qty.item)) |icon| {
-							var prefixBuf = graphics.TextBuffer.init(main.stackAllocator, qty.prefix, .{.color = 0x000000}, false, .left);
-							defer prefixBuf.deinit();
-							const prefixSize = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
-							prefixBuf.renderTextWithoutShadow(0, y, font);
-							const iconSize: f32 = font;
-							graphics.draw.image(icon, .{prefixSize[0] + 2, y + (lineH - iconSize)/2}, .{iconSize, iconSize});
-							y += lineH;
-							continue;
+						const iconItem = itemForName(qty.item) orelse null;
+						if (iconItem) |it_| {
+							if (iconTextureFor(it_)) |icon| {
+								var prefixBuf = graphics.TextBuffer.init(main.stackAllocator, qty.prefix, .{.color = 0x000000}, false, .left);
+								defer prefixBuf.deinit();
+								const prefixSize = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
+								prefixBuf.renderTextWithoutShadow(0, y, font);
+								const iconSize: f32 = font;
+								const oldIconColor = graphics.draw.setColor(0xffffffff);
+								graphics.draw.image(icon, .{prefixSize[0] + 2, y + (lineH - iconSize)/2}, .{iconSize, iconSize});
+								graphics.draw.restoreColor(oldIconColor);
+								y += lineH;
+								continue;
+							}
 						}
 					}
 					var lineBuf = graphics.TextBuffer.init(main.stackAllocator, line, .{.color = 0x000000}, false, .center);

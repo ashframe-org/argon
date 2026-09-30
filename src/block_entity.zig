@@ -667,12 +667,13 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 								defer prefixBuf.deinit();
 								_ = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
 								prefixBuf.renderTextWithoutShadow(textureMargin, y, font);
-								// calculateLineBreaks()[0] returns the BOX width,
-								// not the text width; the real width is
-								// lineBreaks[0].width in font-16 units. (The text
-								// renderer is translated by textureMargin, so the
-								// icon sits after the measured prefix + margin.)
-								const prefixW = prefixBuf.lineBreaks.items[0].width*(font/16.0);
+								// lineBreaks[0] is a sentinel {width:0}; the real
+								// width of a line is the LAST entry, in font-16
+								// units. (The text renderer is translated by
+								// textureMargin, so the icon sits after the
+								// measured prefix + margin.)
+								const lb = prefixBuf.lineBreaks.items;
+								const prefixW = lb[lb.len - 1].width*(font/16.0);
 								const iconSize: f32 = font;
 								drawIcon(icon, textureMargin + prefixW + 2, y + textureMargin + (lineH - iconSize)/2, iconSize, texW, texH);
 								y += lineH;

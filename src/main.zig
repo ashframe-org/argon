@@ -227,6 +227,7 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "textGotoEnd", .key = c.GLFW_KEY_END, .repeatAction = &gui.textCallbacks.gotoEnd},
 		.{.name = "textDeleteLeft", .key = c.GLFW_KEY_BACKSPACE, .repeatAction = &gui.textCallbacks.deleteLeft},
 		.{.name = "textDeleteRight", .key = c.GLFW_KEY_DELETE, .repeatAction = &gui.textCallbacks.deleteRight},
+		.{.name = "textComplete", .key = c.GLFW_KEY_TAB, .pressAction = &gui.textCallbacks.complete},
 		.{.name = "textSelectAll", .key = c.GLFW_KEY_A, .repeatAction = &gui.textCallbacks.selectAll, .requiredModifiers = .{.control = true}},
 		.{.name = "textCopy", .key = c.GLFW_KEY_C, .repeatAction = &gui.textCallbacks.copy, .requiredModifiers = .{.control = true}},
 		.{.name = "textPaste", .key = c.GLFW_KEY_V, .repeatAction = &gui.textCallbacks.paste, .requiredModifiers = .{.control = true}},

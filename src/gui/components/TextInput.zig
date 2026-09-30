@@ -52,6 +52,7 @@ const Options = struct {
 	onUp: main.callbacks.SimpleCallback = .{},
 	onDown: main.callbacks.SimpleCallback = .{},
 	onUpdate: main.callbacks.SimpleCallback = .{},
+	onTab: main.callbacks.SimpleCallback = .{},
 };
 
 pub fn init(pos: Vec2f, maxWidth: f32, maxHeight: f32, text: []const u8, options: Options) *TextInput {
@@ -479,6 +480,13 @@ pub fn cut(self: *TextInput, mods: main.Window.Key.Modifiers) void {
 		self.deleteSelection();
 		self.reloadText();
 		self.ensureCursorVisibility();
+	}
+}
+
+pub fn tab(self: *TextInput, mods: main.Window.Key.Modifiers) void {
+	_ = mods;
+	if (!self.options.disabled and self.options.onTab.inner != null) {
+		self.options.onTab.run();
 	}
 }
 

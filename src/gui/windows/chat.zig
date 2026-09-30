@@ -175,7 +175,7 @@ fn chatWidth() f32 {
 // --- ASHFRAME CUSTOM CLIENT ---
 
 pub fn onOpen() void {
-	input = TextInput.init(.{0, 0}, chatWidth(), 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry)});
+	input = TextInput.init(.{0, 0}, chatWidth(), 32, "", .{.onNewline = .init(sendMessage), .onUp = .init(loadNextHistoryEntry), .onDown = .init(loadPreviousHistoryEntry), .onTab = .init(completeCommand)});
 	refresh();
 }
 
@@ -256,6 +256,56 @@ pub fn render() void {
 pub fn addMessage(msg: []const u8) void {
 	messageQueue.pushBack(main.globalAllocator.dupe(u8, msg));
 }
+
+// --- ASHFRAME CUSTOM CLIENT: command tab-completion. ---
+// Names mirror the Ashframe server command set; completion is purely local
+// (no protocol change), so it works on any server and never affects vanilla.
+const commandNames = [_][]const u8{
+	"clear",      "gamemode", "help",     "invite",   "kick",      "kill",     "particles", "seed",     "server", "spawn",
+	"tickspeed",  "time",     "tp",       "whitelist", "home",     "tpa",      "tpaccept",  "back",     "players", "playtime",
+	"stats",      "afk",      "prefix",   "tpdeny",   "msg",       "claim",    "alliance",  "sethome",  "delhome", "homes",
+	"waypoint",   "unban",    "unstrike", "ban",      "bans",      "skyscan",  "eat",       "titles",   "title",   "veteran",
+	"shop",       "report",   "avatar",   "group",    "perm",      "undo",     "redo",      "pos1",     "pos2",    "deselect",
+	"copy",       "count",    "paste",    "blueprint", "rotate",   "set",      "mask",      "replace",  "toggledecay",
+};
+
+/// Called on Tab while the chat input is focused. If the input is a command
+/// (`/...`) and the first word is an unambiguous prefix, complete it.
+fn completeCommand() void {
+	const text = input.currentString.items;
+	if (text.len == 0 or text[0] != '/') return;
+	const body = text[1..];
+	const end = std.mem.indexOfScalar(u8, body, ' ') orelse body.len;
+	if (end == 0) return; // just "/": nothing to complete
+	const word = body[0..end];
+	// Only complete the command word (leave arguments alone for now).
+	if (end != body.len) return;
+	var match: ?[]const u8 = null;
+	var count: usize = 0;
+	for (commandNames) |cmd| {
+		if (std.mem.startsWith(u8, cmd, word)) {
+			match = cmd;
+			count += 1;
+		}
+	}
+	if (count == 1) {
+		const completed = main.stackAllocator.print("/{s}", .{match.?});
+		defer main.stackAllocator.free(completed);
+		input.setString(completed);
+	} else if (count > 1) {
+		// Ambiguous: list the options in chat so the player can narrow down.
+		var list: main.ListManaged(u8) = .init(main.stackAllocator);
+		defer list.deinit();
+		list.appendSlice("#8a8a8aCommands: #cfcfcf");
+		for (commandNames) |cmd| {
+			if (!std.mem.startsWith(u8, cmd, word)) continue;
+			list.appendSlice(cmd);
+			list.append(' ');
+		}
+		addMessage(list.items);
+	}
+}
+// --- ASHFRAME CUSTOM CLIENT ---
 
 pub fn sendMessage() void {
 	if (input.currentString.items.len != 0) {

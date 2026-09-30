@@ -427,6 +427,11 @@ pub const textCallbacks = struct {
 			current.inputCharacter(codepoint);
 		}
 	}
+	pub fn complete(_: main.Window.Key.Modifiers) void {
+		if (selectedTextInput) |current| {
+			current.tab(.{});
+		}
+	}
 	pub fn left(mods: main.Window.Key.Modifiers) void {
 		if (selectedTextInput) |current| {
 			current.left(mods);

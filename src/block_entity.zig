@@ -322,6 +322,17 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			chunkPos: c_int,
 			blockPos: c_int,
 		} = undefined;
+		// --- ASHFRAME (Argon sign icons): dedicated 2D textured-quad
+		// pipeline for baking item icons into the sign texture. draw.image
+		// is a GUI-pass pipeline (swapChain format, GUI scissor/color) and
+		// silently no-ops here in the world/offscreen pass. ---
+		var iconPipeline: graphics.Pipeline = undefined;
+		var iconUniforms: struct {
+			start: c_int,
+			size: c_int,
+			screen: c_int,
+		} = undefined;
+		var iconVao: graphics.VertexArray = undefined;
 
 		// TODO: Load these from some per-block settings
 		const textureWidth = 128;
@@ -362,6 +373,19 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 		/// not been generated yet. Read-only: must NOT generate here.
 		fn iconTextureFor(item: main.items.BaseItemIndex) ?main.graphics.Texture {
 			return item.texture();
+		}
+
+		/// Draw an item icon as a 2D quad inside the bound sign framebuffer,
+		/// at sign-texture pixel (x, y) with size px. Uses the dedicated
+		/// world-format pipeline (draw.image cannot render here).
+		fn drawIcon(icon: main.graphics.Texture, x: f32, y: f32, size: f32, canvasW: f32, canvasH: f32) void {
+			icon.bindTo(0);
+			iconPipeline.bind(null);
+			c.glUniform2f(iconUniforms.start, x, y);
+			c.glUniform2f(iconUniforms.size, size, size);
+			c.glUniform2f(iconUniforms.screen, canvasW, canvasH);
+			iconVao.bind();
+			c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 		}
 
 		/// Pre-generate icons for every qty-line item in `text`, BEFORE the
@@ -421,6 +445,28 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 						.blendState = .{.attachments = &.{.alphaBlending}, .formats = &.{.world}},
 					},
 				);
+				// --- ASHFRAME (Argon sign icons) ---
+				iconPipeline = graphics.Pipeline.init(
+					"assets/cubyz/shaders/block_entity/sign_icon.vert",
+					"assets/cubyz/shaders/block_entity/sign_icon.frag",
+					"",
+					&iconUniforms,
+					graphics.draw.SimpleVertex2D,
+					.{
+						.rasterState = .{.cullMode = .none},
+						.depthStencilState = .{.depthTest = false, .depthWrite = false},
+						.blendState = .{.attachments = &.{.alphaBlending}, .formats = &.{.world}},
+						.inputAssemblyState = .{.topology = .triangleStrip},
+					},
+				);
+				const quadVertices = [_]graphics.draw.SimpleVertex2D{
+					.{.pos = .{0, 0}},
+					.{.pos = .{0, 1}},
+					.{.pos = .{1, 0}},
+					.{.pos = .{1, 1}},
+				};
+				iconVao = .init(graphics.draw.SimpleVertex2D, &quadVertices, null);
+				// --- ASHFRAME (Argon sign icons) ---
 			}
 		}
 		pub fn deinit() void {
@@ -430,6 +476,10 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			textureDeinitList.deinit(main.globalAllocator);
 			if (!main.settings.launchConfig.headlessServer) {
 				pipeline.deinit();
+				// --- ASHFRAME (Argon sign icons) ---
+				iconPipeline.deinit();
+				iconVao.deinit();
+				// --- ASHFRAME (Argon sign icons) ---
 			}
 			StorageServer.deinit();
 			StorageClient.deinit();
@@ -616,9 +666,7 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 								const prefixSize = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
 								prefixBuf.renderTextWithoutShadow(0, y, font);
 								const iconSize: f32 = font;
-								const oldIconColor = graphics.draw.setColor(0xffffffff);
-								graphics.draw.image(icon, .{prefixSize[0] + 2, y + (lineH - iconSize)/2}, .{iconSize, iconSize});
-								graphics.draw.restoreColor(oldIconColor);
+								drawIcon(icon, prefixSize[0] + 2, y + (lineH - iconSize)/2, iconSize, texW - 2*textureMargin, texH - 2*textureMargin);
 								y += lineH;
 								continue;
 							}

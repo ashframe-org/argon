@@ -448,10 +448,16 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				var it = std.mem.splitScalar(u8, signData.text, '\n');
 				while (it.next()) |line| {
 					const qty = parseQtyLine(line) orelse continue;
-					const item = itemForName(qty.item) orelse continue;
+					const item = itemForName(qty.item) orelse {
+						if (main.settings.launchConfig.ashframeDebug) std.log.warn("[signicon] no item for '{s}'", .{qty.item});
+						continue;
+					};
 					if (item.texture() == null) {
 						_ = item.getTexture(); // safe here (GUI pass)
 						inval = true; // re-bake now the icon exists
+						if (item.texture() == null and main.settings.launchConfig.ashframeDebug) {
+							std.log.warn("[signicon] still no texture for '{s}' (id '{s}') after generate", .{ qty.item, item.id() });
+						}
 					}
 				}
 				if (inval) {

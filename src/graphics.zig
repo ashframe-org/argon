@@ -2515,6 +2515,18 @@ const block_texture = struct { // MARK: block_texture
 
 pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 	const textureSize = block_texture.textureSize;
+	// Save the caller's framebuffer + viewport: this function binds its own
+	// FBO and (previously) left the default framebuffer + window viewport
+	// bound, which clobbered in-progress offscreen passes (e.g. sign icon
+	// baking). Restore on exit so it is safe to call anywhere.
+	var prevFbo: c_int = undefined;
+	c.glGetIntegerv(c.GL_DRAW_FRAMEBUFFER_BINDING, &prevFbo);
+	var prevViewport: [4]c_int = undefined;
+	c.glGetIntegerv(c.GL_VIEWPORT, &prevViewport);
+	defer {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, @bitCast(prevFbo));
+		c.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+	}
 	c.glViewport(0, 0, textureSize, textureSize);
 
 	var frameBuffer: FrameBuffer = undefined;
@@ -2608,9 +2620,6 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 	draw.rectVao.bind();
 	c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 
-	c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
-
-	c.glViewport(0, 0, main.Window.width, main.Window.height);
 	c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
 	return texture;
 }

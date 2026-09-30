@@ -286,12 +286,24 @@ fn registerOpaqueVariant(typ: u16, zon: ZonElement) void {
 }
 
 fn registerCallbacks(typ: u16, zon: ZonElement) void {
-	_onInteract[typ] = blk: {
-		break :blk ClientBlockCallback.init(zon.getChildOrNull("onInteract") orelse break :blk .noop, .{.block = .{.typ = typ, .data = 0}}) orelse {
-			std.log.err("Failed to load onInteract event for block {s}", .{_id[typ]});
-			break :blk .noop;
+	// --- ASHFRAME CUSTOM CLIENT: on the Ashframe server, clicking a sign
+	// opens its shop (shop_sign delegates to edit when no chest is mounted).
+	// Vanilla servers keep stock edit_sign. ---
+	const isSign = if (_blockEntity[typ]) |be| std.mem.eql(u8, be.id, "cubyz:sign") else false;
+	if (isSign and main.settings.launchConfig.ashframeClickSignShop) {
+		var cbZon = main.ZonElement.initObject(main.stackAllocator);
+		defer cbZon.deinit(main.stackAllocator);
+		cbZon.put("type", "shop_sign");
+		_onInteract[typ] = ClientBlockCallback.init(cbZon, .{.block = .{.typ = typ, .data = 0}}) orelse .noop;
+	} else {
+		_onInteract[typ] = blk: {
+			break :blk ClientBlockCallback.init(zon.getChildOrNull("onInteract") orelse break :blk .noop, .{.block = .{.typ = typ, .data = 0}}) orelse {
+				std.log.err("Failed to load onInteract event for block {s}", .{_id[typ]});
+				break :blk .noop;
+			};
 		};
-	};
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 	_onBreak[typ] = blk: {
 		break :blk ServerBlockCallback.init(zon.getChildOrNull("onBreak") orelse break :blk .noop, .{.block = .{.typ = typ, .data = 0}}) orelse {
 			std.log.err("Failed to load onBreak event for block {s}", .{_id[typ]});

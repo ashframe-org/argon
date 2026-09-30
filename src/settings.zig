@@ -233,6 +233,8 @@ pub const launchConfig = struct {
 	pub var ashframeReadCacheMB: u32 = 128;
 	/// Extra diagnostic logs ([timing] join stages, cache decisions).
 	pub var ashframeDebug: bool = true;
+	/// Click a sign to open its shop (Argon). Off = stock edit-on-click.
+	pub var ashframeClickSignShop: bool = true;
 	/// Chat window width in px (text wraps at this width).
 	pub var chatWidth: f32 = 480;
 

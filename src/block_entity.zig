@@ -665,10 +665,16 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 							if (iconTextureFor(it_)) |icon| {
 								var prefixBuf = graphics.TextBuffer.init(main.stackAllocator, qty.prefix, .{.color = 0x000000}, false, .left);
 								defer prefixBuf.deinit();
-								const prefixSize = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
-								prefixBuf.renderTextWithoutShadow(0, y, font);
+								_ = prefixBuf.calculateLineBreaks(font, texW - 2*textureMargin);
+								prefixBuf.renderTextWithoutShadow(textureMargin, y, font);
+								// calculateLineBreaks()[0] returns the BOX width,
+								// not the text width; the real width is
+								// lineBreaks[0].width in font-16 units. (The text
+								// renderer is translated by textureMargin, so the
+								// icon sits after the measured prefix + margin.)
+								const prefixW = prefixBuf.lineBreaks.items[0].width*(font/16.0);
 								const iconSize: f32 = font;
-								drawIcon(icon, prefixSize[0] + 2, y + (lineH - iconSize)/2, iconSize, texW - 2*textureMargin, texH - 2*textureMargin);
+								drawIcon(icon, textureMargin + prefixW + 2, y + textureMargin + (lineH - iconSize)/2, iconSize, texW, texH);
 								y += lineH;
 								continue;
 							}

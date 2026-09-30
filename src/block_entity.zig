@@ -340,16 +340,18 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 
 		/// Resolve a shop-text item name to its icon texture. Shop signs
 		/// store short ids ("ruby"), so try full id, cubyz-namespaced id,
-		/// then a case-insensitive short-id scan. Null = draw the name.
+		/// then a case-insensitive short-id scan. Uses the generating
+		/// accessor: the raw texture field is null until first generated,
+		/// which is why icons never appeared. Null = draw the name.
 		fn iconForItem(name: []const u8) ?main.graphics.Texture {
 			if (main.items.BaseItemIndex.fromId(name)) |item| {
-				if (item.texture()) |tex| return tex;
+				return item.getTexture();
 			}
 			var nsBuf: [128]u8 = undefined;
 			const namespaced = std.fmt.bufPrint(&nsBuf, "cubyz:{s}", .{name}) catch null;
 			if (namespaced) |ns| {
 				if (main.items.BaseItemIndex.fromId(ns)) |item| {
-					if (item.texture()) |tex| return tex;
+					return item.getTexture();
 				}
 			}
 			var i: u16 = 0;
@@ -358,8 +360,7 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				const id = item.id();
 				const short = if (std.mem.indexOfScalar(u8, id, ':')) |colon| id[colon + 1 ..] else id;
 				if (std.ascii.eqlIgnoreCase(short, name)) {
-					if (item.texture()) |tex| return tex;
-					return null;
+					return item.getTexture();
 				}
 			}
 			return null;
@@ -584,16 +585,11 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				const oldClip = graphics.draw.setClip(.{texW - 2*textureMargin, texH - 2*textureMargin});
 				defer graphics.draw.restoreClip(oldClip);
 
-				var lineCount: usize = 0;
-				var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
-				while (lineIt.next()) |_| lineCount += 1;
-				if (lineCount == 0) lineCount = 1;
-				// Stock advances exactly one font per line (y += 16 @
-				// font 16); anything larger overflows the canvas.
+				// Stock anchors at the top (y=0) advancing one font per line;
+				// centering here pushed content down and clipped it.
 				const lineH = font;
-				var y = (texH - 2*textureMargin - @as(f32, @floatFromInt(lineCount))*lineH)/2;
-				if (y < 0) y = 0;
-				lineIt = std.mem.splitScalar(u8, signData.text, '\n');
+				var y: f32 = 0;
+				var lineIt = std.mem.splitScalar(u8, signData.text, '\n');
 				while (lineIt.next()) |line| {
 					if (parseQtyLine(line)) |qty| {
 						if (iconForItem(qty.item)) |icon| {

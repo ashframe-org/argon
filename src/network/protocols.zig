@@ -351,6 +351,9 @@ pub const handShake = struct { // MARK: handShake
 				if (main.ashframe_client.announcedPackHash()) |h| {
 					zonObject.put("ashframePackHash", @as(i64, @bitCast(h)));
 				}
+				// --- ASHFRAME CUSTOM CLIENT: capability version. Lets the
+				// server tell Argon from vanilla and gate features. ---
+				zonObject.put("ashframeClientVersion", @as(i64, main.ashframe_client.clientVersion));
 				// --- ASHFRAME CUSTOM CLIENT ---
 				try conn.secureChannel.startTlsHandshake();
 				conn.secureChannel.finishedCollectingClientVerificationData = true;

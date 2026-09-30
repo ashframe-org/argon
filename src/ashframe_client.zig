@@ -152,6 +152,11 @@ fn cacheTtlMs() i64 {
 	return @as(i64, @intCast(main.settings.launchConfig.ashframeCacheTTLHours))*60*60*1000;
 }
 
+/// Argon capability version announced at handshake (userData ZON).
+/// Vanilla servers ignore unknown fields. Bump when adding gated features
+/// the server must know about (icons=1, large sign=1).
+pub const clientVersion: u16 = 1;
+
 pub fn announcedPackHash() ?u64 {
 	if (!isActive()) return null;
 	var dirBuf: [256]u8 = undefined;

@@ -77,18 +77,24 @@ void mainBlockDrop() {
 	float normalVariation = lightVariation(faceNormal);
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 
-	float reflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
+	float reflectivityAmount = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
+	vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;
 	float fresnelReflection = (1 + dot(normalize(direction), faceNormal));
 	fresnelReflection *= fresnelReflection;
-	fresnelReflection *= min(1, 2*reflectivity); // Limit it to 2*reflectivity to avoid making every block reflective.
-	reflectivity = reflectivity*fixedCubeMapLookup(reflect(direction, faceNormal)).x;
+	fresnelReflection *= min(1, 2*reflectivityAmount); // Limit it to 2*reflectivity to avoid making every block reflective.
+	float reflectivity = reflectivityAmount*fixedCubeMapLookup(reflect(direction, faceNormal)).x;
 	reflectivity = reflectivity*(1 - fresnelReflection) + fresnelReflection;
 
 	vec3 pixelLight = ambientLight*max(vec3(normalVariation), texture(emissionSampler, textureCoords).r*4);
 	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
+	fragColor.rgb *= absorption; // Tint glass (white no-op for opaque blocks).
 	fragColor.rgb += reflectivity*pixelLight;
 
-	if(!passDitherTest(fragColor.a)) discard;
+	// --- ASHFRAME (upstream issue #2246: invisible glass drops/held items).
+	// Glass textures are fully transparent, so testing texture alpha alone
+	// discards every fragment. Test the reflection contribution too; opaque
+	// blocks (reflectivity 0) are unaffected. ---
+	if(!passDitherTest(max(fragColor.a, min(1.0, 2.0*reflectivityAmount)))) discard;
 	fragColor.a = 1;
 	gl_FragDepth = gl_FragCoord.z;
 }

@@ -47,14 +47,50 @@ First join downloads everything once; repeats skip it.
 
 ## Install
 
-1. Clone this repo and check out branch `ashframe`.
-2. Build normally (`zig build -Doptimize=ReleaseSafe`).
-3. `git pull` for updates.
-4. Optional `launchConfig.zon` tweaks (defaults work out of the box;
-   our keys are `ashframeCache`, `ashframeServer`,
-   `ashframeCacheTTLHours`, `ashframeFlushMaxMB`,
-   `ashframeFlushIntervalMinutes`, `ashframeCacheMaxMB`,
-   `ashframeReadCacheMB`, `ashframeDebug`, `chatWidth`).
+You need `git`, `curl`, `tar` and network access. The pinned Zig
+compiler and Cubyz-Libs dependencies download automatically on first
+build — no manual setup. First build takes a few minutes; later builds
+are much faster. The game binary lands at `zig-out/bin/Cubyz`.
+
+**Linux / macOS**
+
+```bash
+git clone -b ashframe https://github.com/ashframe-org/argon.git
+cd argon
+./run_linux.sh -Doptimize=ReleaseSafe
+```
+
+**Windows**
+
+```bat
+git clone -b ashframe https://github.com/ashframe-org/argon.git
+cd argon
+run_windows.bat -Doptimize=ReleaseSafe
+```
+
+(`-b ashframe` checks out our branch instead of the repo default —
+without it you get stock Cubyz with none of these changes.)
+
+## Keeping it up to date
+
+```bash
+cd argon
+git pull
+./run_linux.sh -Doptimize=ReleaseSafe
+```
+
+(On Windows use `run_windows.bat` instead.) Re-running the build
+script after `git pull` is what actually updates your client — pulling
+alone only updates the source. If the branch ever moves, `git pull`
+tells you; stay on `ashframe`.
+
+## Optional config
+
+`launchConfig.zon` tweaks (defaults work out of the box; our keys are
+`ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
+`ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
+`ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
+`chatWidth`).
 
 ## Notes
 

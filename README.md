@@ -52,12 +52,12 @@ compiler and Cubyz-Libs dependencies download automatically on first
 build — no manual setup. First build takes a few minutes; later builds
 are much faster. The game binary lands at `zig-out/bin/Cubyz`.
 
-**Linux / macOS**
+**Linux**
 
 ```bash
 git clone -b ashframe https://github.com/ashframe-org/argon.git
 cd argon
-./run_linux.sh -Doptimize=ReleaseSafe
+./run_linux.sh
 ```
 
 **Windows**
@@ -65,7 +65,7 @@ cd argon
 ```bat
 git clone -b ashframe https://github.com/ashframe-org/argon.git
 cd argon
-run_windows.bat -Doptimize=ReleaseSafe
+run_windows.bat
 ```
 
 (`-b ashframe` checks out our branch instead of the repo default —

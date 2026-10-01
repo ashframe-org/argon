@@ -20,6 +20,9 @@ pub const files = @import("files.zig");
 // --- ASHFRAME CUSTOM CLIENT ---
 pub const ashframe_client = @import("ashframe_client.zig");
 // --- ASHFRAME CUSTOM CLIENT ---
+// --- ASHFRAME (shared name cleaner + corpus test env) ---
+pub const names = @import("names.zig");
+// --- ASHFRAME (shared name cleaner + corpus test env) ---
 pub const fmt = @import("fmt.zig");
 pub const game = @import("game.zig");
 pub const graphics = @import("graphics.zig");

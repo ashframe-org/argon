@@ -33,7 +33,7 @@ fn renderConnectionData(conn: *main.network.Connection, name: []const u8, y: *f3
 	conn.slowChannel.getStatistics(&unconfirmed[2], &queued[2]);
 	// --- ASHFRAME CUSTOM CLIENT: show the smoothed display RTT (median,
 	// floored) instead of the raw estimator, which flashes 0 ms artifacts. ---
-	draw.print("{s} | RTT = {d:.1} ms | {d:.0} kiB/RTT", .{name, conn.rttDisplayUs/1000.0, conn.bandwidthEstimateInBytesPerRtt/1024.0}, 0, y.*, 8);
+	draw.print("{s} | RTT = {d:.1} ms | {d:.0} kiB/RTT | {d} MTU", .{name, conn.rttDisplayUs/1000.0, conn.bandwidthEstimateInBytesPerRtt/1024.0, conn.mtuEstimate}, 0, y.*, 8);
 	// --- ASHFRAME CUSTOM CLIENT ---
 	y.* += 8;
 	draw.print("Waiting in queue:      {: >6} kiB |{: >6} kiB |{: >6} kiB", .{queued[0] >> 10, queued[1] >> 10, queued[2] >> 10}, 0, y.*, 8);

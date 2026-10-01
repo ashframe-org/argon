@@ -142,6 +142,12 @@ pub const User = struct { // MARK: User
 	handInventory: ?InventoryId = null,
 
 	connected: Atomic(bool) = .init(true),
+	// --- ASHFRAME (capability handshake mirror, kept in sync with the Anvil
+	// server tree so network.zig stays portable verbatim; unused when Argon
+	// runs as client since conn.user is null there) ---
+	/// Argon capability version announced in userData (`ashframeClientVersion`).
+	ashframeClientVersion: ?u16 = null,
+	// --- ASHFRAME (capability handshake mirror) ---
 	state: State = .awaitingKeyVerification,
 
 	mutex: main.utils.Mutex = .{},
@@ -283,6 +289,19 @@ pub const User = struct { // MARK: User
 		self.name = main.globalAllocator.dupe(u8, name);
 		self.playerIndex = main.server.players.getLocalPlayerIndex();
 	}
+
+	// --- ASHFRAME (capability handshake mirror, kept in sync with the Anvil
+	// server tree so network.zig stays portable verbatim) ---
+	/// Minimum Argon client version we gate features on.
+	pub const minArgonVersion: u16 = 1;
+	/// True for Argon clients at/above the supported version.
+	pub fn isArgon(self: *const User) bool {
+		const v = self.ashframeClientVersion orelse return false;
+		return v >= minArgonVersion;
+	}
+	/// Argon client version that supports MTU probe traffic (channel 7).
+	pub const mtuProbeVersion: u16 = 2;
+	// --- ASHFRAME (capability handshake mirror) ---
 
 	pub fn verifySignatures(self: *User, reader: *BinaryReader) !void {
 		try self.key.verifySignature(reader, self.conn.secureChannel.verificationDataForClientSignature.items);

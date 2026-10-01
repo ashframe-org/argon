@@ -173,8 +173,8 @@ fn cacheTtlMs() i64 {
 
 /// Argon capability version announced at handshake (userData ZON).
 /// Vanilla servers ignore unknown fields. Bump when adding gated features
-/// the server must know about (icons=1, large sign=1).
-pub const clientVersion: u16 = 1;
+/// the server must know about (icons=1, large sign=1, MTU probing=2).
+pub const clientVersion: u16 = 2;
 
 pub fn announcedPackHash() ?u64 {
 	if (!isActive()) return null;

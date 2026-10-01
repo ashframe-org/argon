@@ -235,6 +235,11 @@ pub const launchConfig = struct {
 	pub var ashframeDebug: bool = true;
 	/// Click a sign to open its shop (Argon). Off = stock edit-on-click.
 	pub var ashframeClickSignShop: bool = true;
+	// --- ASHFRAME (MTU probing, upstream PR #3633 port) ---
+	/// RFC 8899 path-MTU discovery. Argon never probes (conn.user is null
+	/// client-side); the switch only answers server probes. Kill-switch.
+	pub var mtuProbing: bool = true;
+	// --- ASHFRAME (MTU probing) ---
 	/// Chat window width in px (text wraps at this width).
 	pub var chatWidth: f32 = 480;
 
@@ -260,6 +265,7 @@ pub const launchConfig = struct {
 		ashframeReadCacheMB = zon.get(u32, "ashframeReadCacheMB") orelse ashframeReadCacheMB;
 		ashframeDebug = zon.get(bool, "ashframeDebug") orelse ashframeDebug;
 		chatWidth = zon.get(f32, "chatWidth") orelse chatWidth;
+		mtuProbing = zon.get(bool, "mtuProbing") orelse mtuProbing;
 		// --- ASHFRAME CUSTOM CLIENT ---
 	}
 };

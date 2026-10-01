@@ -657,15 +657,7 @@ pub const blockUpdate = struct { // MARK: blockUpdate
 	pub const id: u8 = 7;
 
 	pub fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
-		// --- ASHFRAME (flood hardening): each update queues remesh work, so an
-		// unbounded packet is a remesh-storm DoS. Legit bursts are far smaller. ---
-		var count: u32 = 0;
 		while (reader.remaining.len != 0) {
-			if (count >= 131072) {
-				std.log.err("blockUpdate: dropping rest of oversized packet ({d} updates applied)", .{count});
-				return;
-			}
-			count += 1;
 			const pos = try reader.readVec(Vec3i);
 			// --- ASHFRAME CUSTOM CLIENT: invalidate edited chunk. ---
 			main.ashframe_client.invalidateChunk(pos[0], pos[1], pos[2]);
@@ -697,17 +689,8 @@ pub const entity = struct { // MARK: entity
 	pub fn clientReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		const zonArray = ZonElement.parseFromString(main.stackAllocator, null, reader.remaining);
 		defer zonArray.deinit(main.stackAllocator);
-		// --- ASHFRAME (flood hardening): one packet can otherwise queue tens
-		// of thousands of adds (each a draw call + interpolation state). The
-		// join snapshot is the biggest legit packet, far below this cap. ---
-		var processed: u32 = 0;
 		var i: u32 = 0;
 		while (i < zonArray.array.items.len) : (i += 1) {
-			if (processed >= 131072) {
-				std.log.err("entity: dropping rest of oversized packet", .{});
-				return;
-			}
-			processed += 1;
 			const elem = zonArray.array.items[i];
 			switch (elem) {
 				.int => {
@@ -726,11 +709,6 @@ pub const entity = struct { // MARK: entity
 			}
 		}
 		while (i < zonArray.array.items.len) : (i += 1) {
-			if (processed >= 131072) {
-				std.log.err("entity: dropping rest of oversized packet", .{});
-				return;
-			}
-			processed += 1;
 			const elem: ZonElement = zonArray.array.items[i];
 			if (elem == .int) {
 				conn.manager.world.?.itemDrops.remove(elem.as(u16) orelse return error.Invalid);

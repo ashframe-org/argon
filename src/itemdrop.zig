@@ -65,10 +65,6 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 
 	emptyMutex: main.utils.Mutex = .{},
 	isEmpty: std.bit_set.ArrayBitSet(usize, maxCapacity),
-	// --- ASHFRAME (idempotent drop adds, ported from server tree): tracks
-	// live indices so duplicate adds and unknown removes are no-ops instead
-	// of list corruption (size underflow / OOB write = crash). ---
-	inList: std.bit_set.ArrayBitSet(usize, maxCapacity),
 
 	changeQueue: main.utils.ConcurrentQueue(union(enum) { add: struct { u16, ItemDrop }, remove: u16 }),
 
@@ -81,7 +77,6 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 			.allocator = allocator,
 			.list = std.MultiArrayList(ItemDrop){},
 			.isEmpty = .full,
-			.inList = .empty,
 			.changeQueue = .init(allocator, 16),
 			.world = world,
 		};
@@ -319,14 +314,6 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 
 	fn internalAdd(self: *ItemDropManager, i: u16, drop_: ItemDrop) void {
 		var drop = drop_;
-		// --- ASHFRAME (idempotent drop adds): a drop that is already in the
-		// list must not be added again, or it would be rendered twice and
-		// corrupt the index mapping. Release the caller's copy once. ---
-		if (self.inList.isSet(i)) {
-			drop.itemStack.item.deinit();
-			return;
-		}
-		self.inList.set(i);
 		if (self.world == null) {
 			ClientItemDropManager.clientSideInternalAdd(self, i, drop);
 		}
@@ -337,14 +324,6 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 	}
 
 	fn internalRemove(self: *ItemDropManager, i: u16) void {
-		// --- ASHFRAME (idempotent drop adds): removing a drop that isn't
-		// present must be a no-op; otherwise `size` underflows and corrupts
-		// the list (crash) when a remove for an unknown drop arrives. ---
-		if (!self.inList.isSet(i)) return;
-		self.inList.unset(i);
-		self.emptyMutex.lock();
-		self.isEmpty.set(i);
-		self.emptyMutex.unlock();
 		self.size -= 1;
 		const ii = self.list.items(.reverseIndex)[i];
 		self.list.items(.itemStack)[i].deinit();

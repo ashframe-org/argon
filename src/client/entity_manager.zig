@@ -64,25 +64,6 @@ pub fn addEntity(zon: ZonElement) !void {
 	defer mutex.unlock();
 
 	const id = zon.get(u32, "id") orelse return error.entityIdMissing;
-	// --- ASHFRAME (flood/crash hardening): entity ids are a small per-boot
-	// counter (players + creatures). A gigantic id would grow idMapping by
-	// gigabytes (OOM crash) — reject it loudly instead of growing. ---
-	if (id >= 1 << 20) {
-		std.log.err("addEntity: refusing insane entity id {d}", .{id});
-		return error.entityIdMissing;
-	}
-	// --- ASHFRAME (flood hardening): the entity store is a fixed reservation;
-	// growing past it segfaults. Legit counts are in the hundreds. ---
-	if (entities.len >= (1 << 20) - 1) {
-		std.log.err("addEntity: entity store full, dropping id {d}", .{id});
-		return error.entityIdMissing;
-	}
-	// --- ASHFRAME (duplicate-add hardening): re-adding a live id used to
-	// orphan the old slot (leaked, rendered forever) and corrupt the mapping.
-	// Retire the old entry first so an add is always idempotent. ---
-	if (id < idMapping.items.len and idMapping.items[id] != null) {
-		removeEntityInternal(@enumFromInt(id));
-	}
 	const index = entities.len;
 	var ent = entities.addOne();
 
@@ -101,13 +82,6 @@ pub fn getEntity(entity: main.entity.Entity) ?*main.client.Entity {
 pub fn removeEntity(entity: main.entity.Entity) void {
 	mutex.lock();
 	defer mutex.unlock();
-
-	removeEntityInternal(entity);
-}
-
-/// Same as `removeEntity` but requires the mutex to already be held.
-fn removeEntityInternal(entity: main.entity.Entity) void {
-	mutex.assertLocked();
 
 	if (idMapping.items.len <= @intFromEnum(entity)) return;
 	const index: u32 = idMapping.items[@intFromEnum(entity)] orelse return;

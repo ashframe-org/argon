@@ -64,6 +64,28 @@ var lastPz: i32 = 0;
 var lastRD: u16 = 0;
 var mutex: main.utils.Mutex = .{};
 
+// --- ASHFRAME CUSTOM CLIENT (perf: cache the visible-node traversal) ---
+// updateAndGetRenderChunks re-ran the whole hierarchical BFS + per-node
+// neighbor-LOD recompute every frame (~250ms BFS + ~140ms nbrLod at RD12 on
+// this hardware), even when nothing that affects visibility had changed.
+// Cache the resulting node set and reuse it until something can change it:
+// the player crossing a node-sized boundary, the render distance changing,
+// or any node's meshed state changing (`visibilityGen`). Render thread only.
+var cachedNodeList: main.List(*ChunkMeshNode) = .empty;
+var cachedPx: i32 = std.math.minInt(i32);
+var cachedPy: i32 = std.math.minInt(i32);
+var cachedPz: i32 = std.math.minInt(i32);
+var cachedRD: u16 = 0;
+var cachedGen: u64 = 0;
+var visibilityGen: u64 = 0;
+/// visibilityGen at the time the neighbor-LOD loop last ran. The loop only
+/// needs to re-run when some node's meshed/LOD state changed since then.
+var lastNbrLodGen: u64 = std.math.maxInt(u64);
+/// Bump whenever a node's meshed state can affect the visible set.
+fn bumpVisibilityGen() void {
+	visibilityGen +%= 1;
+}
+
 pub const BlockUpdate = struct {
 	pos: Vec3i,
 	newBlock: blocks.Block,
@@ -103,6 +125,15 @@ pub fn init() void { // MARK: init()
 	priorityMeshUpdateList = .init(main.globalAllocator, 16);
 	pendingLightMeshes = .init(main.globalAllocator); // ASHFRAME: deferred builds
 	mapUpdatableList = .init(main.globalAllocator, 16);
+	// --- ASHFRAME CUSTOM CLIENT (perf cache): storage arrays were just
+	// recreated, so any cached node pointers are stale. Reset the cache. ---
+	cachedNodeList = .empty;
+	cachedPx = std.math.minInt(i32);
+	cachedPy = std.math.minInt(i32);
+	cachedPz = std.math.minInt(i32);
+	cachedRD = 0;
+	cachedGen = 0;
+	visibilityGen = 0;
 }
 
 pub fn deinit() void {
@@ -121,6 +152,14 @@ pub fn deinit() void {
 	for (mapStorageLists) |mapStorageList| {
 		main.globalAllocator.destroy(mapStorageList);
 	}
+	// --- ASHFRAME CUSTOM CLIENT (perf cache): drop stale node pointers. ---
+	cachedNodeList.clearAndFree(main.globalAllocator);
+	cachedPx = std.math.minInt(i32);
+	cachedPy = std.math.minInt(i32);
+	cachedPz = std.math.minInt(i32);
+	cachedRD = 0;
+	cachedGen = 0;
+	visibilityGen = 0;
 
 	updatableList.clearAndFree(main.globalAllocator);
 	while (mapUpdatableList.popFront()) |map| {
@@ -365,6 +404,7 @@ fn freeOldMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16) void { 
 					node.pos = undefined;
 					if (oldMesh) |mesh| {
 						node.finishedMeshing = false;
+						bumpVisibilityGen();
 						updateHigherLodNodeFinishedMeshing(mesh.pos, false);
 						mesh.deferredDeinit();
 					}
@@ -646,127 +686,165 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 
 	// Finds all visible chunks and lod chunks using a breadth-first hierarchical search.
 
-	var searchList = main.utils.CircularBufferQueue(*ChunkMeshNode).init(main.stackAllocator, 1024);
-	defer searchList.deinit();
-	{
-		var firstPos = chunk.ChunkPosition{
-			.wx = playerPosInt[0],
-			.wy = playerPosInt[1],
-			.wz = playerPosInt[2],
-			.voxelSize = 1,
-		};
-		const lod: u3 = settings.highestLod;
-		firstPos.wx &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
-		firstPos.wy &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
-		firstPos.wz &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
-		firstPos.voxelSize <<= lod;
-		const node = getNodePointer(firstPos);
-		const hasMesh = node.finishedMeshing;
-		if (hasMesh) {
-			node.active = true;
-			node.rendered = true;
-			searchList.pushBack(node);
-		}
-	}
+	// --- ASHFRAME CUSTOM CLIENT (perf: cached traversal) ---
+	// Reuse the previous frame's visible-node set while nothing that affects
+	// visibility changed (same quantized player pos + RD + no mesh-state
+	// change). Idle at RD12 was paying the full ~400ms traversal every frame.
+	// Quantize to the block (floor) position: while standing on the same
+	// block the frustum is effectively identical, so the visible set cannot
+	// change. Walking re-runs the BFS each block-step (correct, and still
+	// far cheaper than every frame at every sub-block).
+	const qx: i32 = playerPosInt[0];
+	const qy: i32 = playerPosInt[1];
+	const qz: i32 = playerPosInt[2];
+	const cacheValid = cachedPx == qx and cachedPy == qy and cachedPz == qz and
+		cachedRD == renderDistance and cachedGen == visibilityGen;
+
 	var nodeList: main.ListManaged(*ChunkMeshNode) = .initCapacity(main.stackAllocator, 1024);
 	defer nodeList.deinit();
-	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
-	main.ashframe_client.profBegin(.bfs);
-	// --- ASHFRAME CUSTOM CLIENT ---
-	while (searchList.popFront()) |node| {
-		std.debug.assert(node.finishedMeshing);
-		std.debug.assert(node.active);
-		if (!node.active) continue;
-		node.active = false;
 
-		const pos = node.pos;
-
-		const relPos: Vec3i = Vec3i{pos.wx, pos.wy, pos.wz} - playerPosInt;
-
-		const chunkSizeVector: Vec3i = @splat(chunk.chunkSize*pos.voxelSize);
-
-		if (pos.voxelSize == @as(i32, 1) << settings.highestLod) {
-			for (chunk.Neighbor.iterable) |neighbor| {
-				const component = neighbor.extractDirectionComponent(relPos);
-				if (neighbor.isPositive() and component + chunk.chunkSize*pos.voxelSize <= 0) continue;
-				if (!neighbor.isPositive() and component > 0) continue;
-				const neighborPos = chunk.ChunkPosition{
-					.wx = pos.wx +% neighbor.relX()*chunk.chunkSize*pos.voxelSize,
-					.wy = pos.wy +% neighbor.relY()*chunk.chunkSize*pos.voxelSize,
-					.wz = pos.wz +% neighbor.relZ()*chunk.chunkSize*pos.voxelSize,
-					.voxelSize = pos.voxelSize,
-				};
-				const node2 = getNodePointer(neighborPos);
-				if (!node2.active and node2.finishedMeshing) {
-					const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{pos.wx, pos.wy, pos.wz})) - playerPos);
-					if (!frustum.testAAB(relPosFloat + @as(Vec3f, @floatFromInt(neighbor.relPos()*chunkSizeVector)), @floatFromInt(chunkSizeVector))) continue;
-					node2.active = true;
-					node2.rendered = true;
-					searchList.pushBack(node2);
-				}
+	if (cacheValid) {
+		// Nothing changed: reuse the cached visible-node set, skipping the
+		// entire BFS + frustum tests. The neighborLod + meshBuild loops below
+		// still run (cheap, and they handle pending uploads).
+		nodeList.appendSlice(cachedNodeList.items);
+	} else {
+		var searchList = main.utils.CircularBufferQueue(*ChunkMeshNode).init(main.stackAllocator, 1024);
+		defer searchList.deinit();
+		{
+			var firstPos = chunk.ChunkPosition{
+				.wx = playerPosInt[0],
+				.wy = playerPosInt[1],
+				.wz = playerPosInt[2],
+				.voxelSize = 1,
+			};
+			const lod: u3 = settings.highestLod;
+			firstPos.wx &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
+			firstPos.wy &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
+			firstPos.wz &= ~@as(i32, chunk.chunkMask << lod | (@as(i32, 1) << lod) - 1);
+			firstPos.voxelSize <<= lod;
+			const node = getNodePointer(firstPos);
+			const hasMesh = node.finishedMeshing;
+			if (hasMesh) {
+				node.active = true;
+				node.rendered = true;
+				searchList.pushBack(node);
 			}
 		}
+		// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+		main.ashframe_client.profBegin(.bfs);
+		// --- ASHFRAME CUSTOM CLIENT ---
+		while (searchList.popFront()) |node| {
+			std.debug.assert(node.finishedMeshing);
+			std.debug.assert(node.active);
+			if (!node.active) continue;
+			node.active = false;
 
-		if (node.finishedMeshingHigherResolution == 0xff) {
-			node.rendered = false;
-			const lowerLodBit: i32 = pos.voxelSize*chunk.chunkSize >> 1;
-			const startPos: chunk.ChunkPosition = .{
-				.wx = pos.wx | if ((pos.wx | lowerLodBit) -% playerPosInt[0] > 0) lowerLodBit else 0,
-				.wy = pos.wy | if ((pos.wy | lowerLodBit) -% playerPosInt[1] > 0) lowerLodBit else 0,
-				.wz = pos.wz | if ((pos.wz | lowerLodBit) -% playerPosInt[2] > 0) lowerLodBit else 0,
-				.voxelSize = pos.voxelSize >> 1,
-			};
-			for (0..2) |dx| {
-				for (0..2) |dy| {
-					for (0..2) |dz| {
-						var nextPos = startPos;
-						if (dx == 1) nextPos.wx ^= lowerLodBit;
-						if (dy == 1) nextPos.wy ^= lowerLodBit;
-						if (dz == 1) nextPos.wz ^= lowerLodBit;
-						const node2 = getNodePointer(nextPos);
-						const relNextPos: Vec3d = @as(Vec3d, @floatFromInt(Vec3i{nextPos.wx, nextPos.wy, nextPos.wz})) - playerPos;
-						if (!frustum.testAAB(@floatCast(relNextPos), @floatFromInt(chunkSizeVector))) continue;
-						std.debug.assert(node2.finishedMeshing);
+			const pos = node.pos;
+
+			const relPos: Vec3i = Vec3i{pos.wx, pos.wy, pos.wz} - playerPosInt;
+
+			const chunkSizeVector: Vec3i = @splat(chunk.chunkSize*pos.voxelSize);
+
+			if (pos.voxelSize == @as(i32, 1) << settings.highestLod) {
+				for (chunk.Neighbor.iterable) |neighbor| {
+					const component = neighbor.extractDirectionComponent(relPos);
+					if (neighbor.isPositive() and component + chunk.chunkSize*pos.voxelSize <= 0) continue;
+					if (!neighbor.isPositive() and component > 0) continue;
+					const neighborPos = chunk.ChunkPosition{
+						.wx = pos.wx +% neighbor.relX()*chunk.chunkSize*pos.voxelSize,
+						.wy = pos.wy +% neighbor.relY()*chunk.chunkSize*pos.voxelSize,
+						.wz = pos.wz +% neighbor.relZ()*chunk.chunkSize*pos.voxelSize,
+						.voxelSize = pos.voxelSize,
+					};
+					const node2 = getNodePointer(neighborPos);
+					if (!node2.active and node2.finishedMeshing) {
+						const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{pos.wx, pos.wy, pos.wz})) - playerPos);
+						if (!frustum.testAAB(relPosFloat + @as(Vec3f, @floatFromInt(neighbor.relPos()*chunkSizeVector)), @floatFromInt(chunkSizeVector))) continue;
 						node2.active = true;
 						node2.rendered = true;
-						searchList.pushFront(node2);
+						searchList.pushBack(node2);
 					}
 				}
 			}
-		} else {
-			nodeList.append(node);
-		}
-	}
-	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
-	main.ashframe_client.profEnd(); // end BFS
-	main.ashframe_client.profBegin(.neighborLod);
-	// --- ASHFRAME CUSTOM CLIENT ---
-	for (nodeList.items) |node| {
-		const pos = node.pos;
-		var isNeighborLod: [6]bool = @splat(false);
-		if (pos.voxelSize != @as(i32, 1) << settings.highestLod) {
-			for (chunk.Neighbor.iterable) |neighbor| {
-				var neighborPos = chunk.ChunkPosition{
-					.wx = pos.wx +% neighbor.relX()*chunk.chunkSize*pos.voxelSize,
-					.wy = pos.wy +% neighbor.relY()*chunk.chunkSize*pos.voxelSize,
-					.wz = pos.wz +% neighbor.relZ()*chunk.chunkSize*pos.voxelSize,
-					.voxelSize = pos.voxelSize,
+
+			if (node.finishedMeshingHigherResolution == 0xff) {
+				node.rendered = false;
+				const lowerLodBit: i32 = pos.voxelSize*chunk.chunkSize >> 1;
+				const startPos: chunk.ChunkPosition = .{
+					.wx = pos.wx | if ((pos.wx | lowerLodBit) -% playerPosInt[0] > 0) lowerLodBit else 0,
+					.wy = pos.wy | if ((pos.wy | lowerLodBit) -% playerPosInt[1] > 0) lowerLodBit else 0,
+					.wz = pos.wz | if ((pos.wz | lowerLodBit) -% playerPosInt[2] > 0) lowerLodBit else 0,
+					.voxelSize = pos.voxelSize >> 1,
 				};
-				neighborPos.wx &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
-				neighborPos.wy &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
-				neighborPos.wz &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
-				neighborPos.voxelSize *= 2;
-				const node2 = getNodePointer(neighborPos);
-				isNeighborLod[neighbor.toInt()] = node2.finishedMeshingHigherResolution != 0xff;
+				for (0..2) |dx| {
+					for (0..2) |dy| {
+						for (0..2) |dz| {
+							var nextPos = startPos;
+							if (dx == 1) nextPos.wx ^= lowerLodBit;
+							if (dy == 1) nextPos.wy ^= lowerLodBit;
+							if (dz == 1) nextPos.wz ^= lowerLodBit;
+							const node2 = getNodePointer(nextPos);
+							const relNextPos: Vec3d = @as(Vec3d, @floatFromInt(Vec3i{nextPos.wx, nextPos.wy, nextPos.wz})) - playerPos;
+							if (!frustum.testAAB(@floatCast(relNextPos), @floatFromInt(chunkSizeVector))) continue;
+							std.debug.assert(node2.finishedMeshing);
+							node2.active = true;
+							node2.rendered = true;
+							searchList.pushFront(node2);
+						}
+					}
+				}
+			} else {
+				nodeList.append(node);
 			}
 		}
-		if (!std.meta.eql(node.isNeighborLod, isNeighborLod)) {
-			const mesh = node.mesh.load(.acquire).?; // no other thread is allowed to overwrite the mesh (unless it's null).
-			mesh.isNeighborLod = isNeighborLod;
-			node.isNeighborLod = isNeighborLod;
-			mesh.uploadData();
-		}
+		// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+		main.ashframe_client.profEnd(); // end BFS
+		// --- ASHFRAME CUSTOM CLIENT ---
+		// Refresh the cache with this frame's result.
+		cachedNodeList.clearRetainingCapacity();
+		cachedNodeList.appendSlice(main.globalAllocator, nodeList.items);
+		cachedPx = qx;
+		cachedPy = qy;
+		cachedPz = qz;
+		cachedRD = renderDistance;
+		cachedGen = visibilityGen;
 	}
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+	main.ashframe_client.profBegin(.neighborLod);
+	// --- ASHFRAME CUSTOM CLIENT ---
+	// Neighbor-LOD only changes when some node's meshed state changed
+	// (`visibilityGen`). Skip the whole per-node recompute otherwise - it was
+	// ~140ms/frame of pure repeated work while idle. ---
+	if (visibilityGen != lastNbrLodGen) {
+		lastNbrLodGen = visibilityGen;
+		for (nodeList.items) |node| {
+			const pos = node.pos;
+			var isNeighborLod: [6]bool = @splat(false);
+			if (pos.voxelSize != @as(i32, 1) << settings.highestLod) {
+				for (chunk.Neighbor.iterable) |neighbor| {
+					var neighborPos = chunk.ChunkPosition{
+						.wx = pos.wx +% neighbor.relX()*chunk.chunkSize*pos.voxelSize,
+						.wy = pos.wy +% neighbor.relY()*chunk.chunkSize*pos.voxelSize,
+						.wz = pos.wz +% neighbor.relZ()*chunk.chunkSize*pos.voxelSize,
+						.voxelSize = pos.voxelSize,
+					};
+					neighborPos.wx &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
+					neighborPos.wy &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
+					neighborPos.wz &= ~@as(i32, neighborPos.voxelSize*chunk.chunkSize);
+					neighborPos.voxelSize *= 2;
+					const node2 = getNodePointer(neighborPos);
+					isNeighborLod[neighbor.toInt()] = node2.finishedMeshingHigherResolution != 0xff;
+				}
+			}
+			if (!std.meta.eql(node.isNeighborLod, isNeighborLod)) {
+				const mesh = node.mesh.load(.acquire).?; // no other thread is allowed to overwrite the mesh (unless it's null).
+				mesh.isNeighborLod = isNeighborLod;
+				node.isNeighborLod = isNeighborLod;
+				mesh.uploadData();
+			}
+		}
+	} // end visibilityGen != lastNbrLodGen gate
 	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
 	main.ashframe_client.profEnd(); // end neighborLod
 	main.ashframe_client.profBegin(.meshBuild);
@@ -918,6 +996,7 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 			};
 			node.finishedMeshing = true;
 			mesh.finishedMeshing = true;
+			bumpVisibilityGen();
 			updateHigherLodNodeFinishedMeshing(pos, true);
 			_ = updatableList.swapRemove(i);
 			mutex.unlock();
@@ -950,6 +1029,7 @@ pub fn addMeshToStorage(mesh: *chunk_meshing.ChunkMesh) error{ AlreadyStored, No
 		return error.AlreadyStored;
 	}
 	node.finishedMeshing = mesh.finishedMeshing;
+	bumpVisibilityGen();
 	updateHigherLodNodeFinishedMeshing(mesh.pos, mesh.finishedMeshing);
 }
 

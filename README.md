@@ -5,12 +5,24 @@ Lightweight Modification that brings improved game & network performance along w
 ## What it does
 
 - Chunks & Lighting are cached in RAM & DISK.
+- **Performance**: uses a fast multi-core allocator instead of the engine's
+  debug allocator; right-sized GPU buffers; cached chunk-visibility traversal
+  with per-frame frustum culling. Much higher FPS at large render distances,
+  and far less VRAM/RAM use.
+- **Clean join**: a logo + progress screen with staged status ("loading
+  chunks", "syncing time") that holds the world hidden until it is actually
+  ready, so there are no dark/bare first frames or flashes.
 - **Shop signs**: item icons & click a sign to open the buy menu.
 - **Chat**: tab-completion for commands and subcommands, `@name`
   completion, and gold `@mention` pings.
+- **MTU path discovery** (RFC 8899): sizes packets to your connection on
+  high-latency / lossy links for fewer stalls.
 - faster handshake on high-latency links, stable ping.
 - Skips re-unpacking server addons when unchanged.
+- Fixes flashing translucent (water/glass) squares on some GPUs/drivers.
 - Delete `~/.cubyz/ashframeCache/` anytime to force a full redownload.
+- Set `ashframeDebug = false` in `launchConfig.zon` to silence the
+  `[fps]`/cache debug logging.
 
 ## Comparison (measured on the live Ashframe server, Sep 2026)
 
@@ -25,6 +37,7 @@ Average of test sessions; `~` = approximate. Ranked best-on-the-right
 | Revisit / teleport back | full re-stream ❌ | full re-stream ❌ | ~0.16 s ✅ | ~0.16 s ✅ |
 | Shop icons / click-to-buy | no ❌ | no ❌ | yes ✅ | yes ✅ |
 | Mentions / autocomplete | no ❌ | partial 🟡 | yes ✅ | yes ✅ |
+| Chunk-visibility traversal | every frame ❌ | every frame ❌ | cached ✅ | cached ✅ |
 | Extra RAM | — ➖ | — ➖ | ~128 MB 🟡 | ~128 MB 🟡 |
 
 
@@ -65,7 +78,7 @@ git pull
 `ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
 `ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
 `ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
-`chatWidth`).
+`ashframeClickSignShop`, `mtuProbing`, `chatWidth`).
 
 ## Notes
 

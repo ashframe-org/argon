@@ -78,21 +78,6 @@ var cachedPz: i32 = std.math.minInt(i32);
 var cachedRD: u16 = 0;
 var cachedGen: u64 = 0;
 var visibilityGen: u64 = 0;
-/// Camera view direction when the visible set was last computed. The frustum
-/// depends on view direction, so the cache must invalidate when the player
-/// looks around - otherwise turning reveals chunks that were never selected
-/// (the "chunks don't load until you move" bug). Compared by dot product with
-/// a small angular threshold so turning a little still hits the cache.
-var cachedViewDir: main.vec.Vec3f = .{0, 0, 1};
-/// Framebuffer width when the visible set was last computed: the frustum's
-/// horizontal half-angle depends on the aspect ratio, so a resolution change
-/// must also invalidate (rare; cheap to check).
-var cachedAspectW: u31 = 0;
-// cos(threshold) ~= 0.866 = 30 degrees. Re-running the BFS is itself a
-// ~250ms hitch at RD12, so we don't want to trigger it every few degrees
-// while looking around; 30 degrees bounds the "chunks appear slightly after
-// you turn" lag while keeping turns free of many hitches.
-const viewDirCacheCos: f32 = 0.866;
 /// visibilityGen at the time the neighbor-LOD loop last ran. The loop only
 /// needs to re-run when some node's meshed/LOD state changed since then.
 var lastNbrLodGen: u64 = std.math.maxInt(u64);
@@ -148,8 +133,6 @@ pub fn init() void { // MARK: init()
 	cachedPz = std.math.minInt(i32);
 	cachedRD = 0;
 	cachedGen = 0;
-	cachedViewDir = .{0, 0, 1};
-	cachedAspectW = 0;
 	visibilityGen = 0;
 }
 
@@ -176,8 +159,6 @@ pub fn deinit() void {
 	cachedPz = std.math.minInt(i32);
 	cachedRD = 0;
 	cachedGen = 0;
-	cachedViewDir = .{0, 0, 1};
-	cachedAspectW = 0;
 	visibilityGen = 0;
 
 	updatableList.clearAndFree(main.globalAllocator);
@@ -721,17 +702,12 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	const qx: i32 = playerPosInt[0];
 	const qy: i32 = playerPosInt[1];
 	const qz: i32 = playerPosInt[2];
-	// Current camera view direction (same derivation as Frustum.init).
-	const viewDir: main.vec.Vec3f = blk: {
-		const inv = main.game.camera.viewMatrix.transpose();
-		const d = main.vec.xyz(inv.mulVec(main.vec.Vec4f{0, 1, 0, 1}));
-		const len = @sqrt(@reduce(.Add, d*d));
-		break :blk if (len > 0) d/@as(main.vec.Vec3f, @splat(len)) else d;
-	};
-	const viewDirUnchanged = @reduce(.Add, viewDir*cachedViewDir) >= viewDirCacheCos;
+	// --- ASHFRAME CUSTOM CLIENT (perf fix): the cached set is the whole
+	// render cylinder (view-independent), so turning must NOT invalidate it.
+	// The frustum is applied per-frame in the meshBuild loop instead. Only
+	// position, render distance and mesh-state changes re-run the BFS. ---
 	const cacheValid = cachedPx == qx and cachedPy == qy and cachedPz == qz and
-		cachedRD == renderDistance and cachedGen == visibilityGen and viewDirUnchanged and
-		cachedAspectW == main.renderer.lastWidth;
+		cachedRD == renderDistance and cachedGen == visibilityGen;
 
 	var nodeList: main.ListManaged(*ChunkMeshNode) = .initCapacity(main.stackAllocator, 1024);
 	defer nodeList.deinit();
@@ -777,8 +753,6 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 
 			const relPos: Vec3i = Vec3i{pos.wx, pos.wy, pos.wz} - playerPosInt;
 
-			const chunkSizeVector: Vec3i = @splat(chunk.chunkSize*pos.voxelSize);
-
 			if (pos.voxelSize == @as(i32, 1) << settings.highestLod) {
 				for (chunk.Neighbor.iterable) |neighbor| {
 					const component = neighbor.extractDirectionComponent(relPos);
@@ -792,8 +766,12 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 					};
 					const node2 = getNodePointer(neighborPos);
 					if (!node2.active and node2.finishedMeshing) {
-						const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{pos.wx, pos.wy, pos.wz})) - playerPos);
-						if (!frustum.testAAB(relPosFloat + @as(Vec3f, @floatFromInt(neighbor.relPos()*chunkSizeVector)), @floatFromInt(chunkSizeVector))) continue;
+						// --- ASHFRAME CUSTOM CLIENT (perf fix): no frustum
+						// test here. The BFS now selects the whole render
+						// cylinder (view-independent, cacheable); the frustum
+						// is applied per-frame in the meshBuild loop, so
+						// turning reveals already-selected chunks with no seam
+						// and without re-running the BFS. ---
 						node2.active = true;
 						node2.rendered = true;
 						searchList.pushBack(node2);
@@ -818,8 +796,6 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 							if (dy == 1) nextPos.wy ^= lowerLodBit;
 							if (dz == 1) nextPos.wz ^= lowerLodBit;
 							const node2 = getNodePointer(nextPos);
-							const relNextPos: Vec3d = @as(Vec3d, @floatFromInt(Vec3i{nextPos.wx, nextPos.wy, nextPos.wz})) - playerPos;
-							if (!frustum.testAAB(@floatCast(relNextPos), @floatFromInt(chunkSizeVector))) continue;
 							std.debug.assert(node2.finishedMeshing);
 							node2.active = true;
 							node2.rendered = true;
@@ -842,8 +818,6 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 		cachedPz = qz;
 		cachedRD = renderDistance;
 		cachedGen = visibilityGen;
-		cachedViewDir = viewDir;
-		cachedAspectW = main.renderer.lastWidth;
 	}
 	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
 	main.ashframe_client.profBegin(.neighborLod);
@@ -887,6 +861,17 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	for (nodeList.items) |node| {
 		node.rendered = false;
 		if (!node.finishedMeshing) continue;
+
+		// --- ASHFRAME CUSTOM CLIENT (perf fix): per-frame frustum test.
+		// The BFS is view-independent now, so cull here using this frame's
+		// frustum. Chunks outside the view are skipped without re-running the
+		// BFS, and turning shows already-loaded chunks immediately. ---
+		{
+			const pos = node.pos;
+			const chunkSizeVector: Vec3f = @floatFromInt(Vec3i{chunk.chunkSize*pos.voxelSize, chunk.chunkSize*pos.voxelSize, chunk.chunkSize*pos.voxelSize});
+			const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{pos.wx, pos.wy, pos.wz})) - playerPos);
+			if (!frustum.testAAB(relPosFloat, chunkSizeVector)) continue;
+		}
 
 		const mesh = node.mesh.load(.acquire).?; // no other thread is allowed to overwrite the mesh (unless it's null).
 

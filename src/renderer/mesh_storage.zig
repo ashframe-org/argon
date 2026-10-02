@@ -1145,23 +1145,28 @@ fn boxInRenderVolume(px: i32, py: i32, rd: i32, minX: i64, minY: i64, maxX: i64,
 pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
 	var total: u32 = 0;
 	var resident: u32 = 0;
-	const rd: i32 = coverageRenderDistanceBlocks();
+	const rd: u16 = if (lastRD != 0) lastRD else settings.renderDistance;
 	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const vs: u31 = @as(u31, 1) << lod;
 		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
-		// Per-LOD reach: coarse chunks cover a whole cell, so walk at least
-		// one cell beyond the raw render distance in every direction.
-		const reach: i32 = (@divTrunc(rd, sz) + 1)*sz;
-		var cx = (px - reach) & ~(sz - 1);
-		const maxCx = (px + reach) & ~(sz - 1);
-		while (cx <= maxCx) : (cx += sz) {
-			var cy = (py - reach) & ~(sz - 1);
-			const maxCy = (py + reach) & ~(sz - 1);
-			while (cy <= maxCy) : (cy += sz) {
+		const mask: i32 = sz - 1;
+		const invMask: i32 = ~mask;
+		// EXACTLY mirror createNewMeshes' per-LOD X/Y bounds (same mask math), so
+		// the coverage denominator counts only cells the client actually builds.
+		// The previous one-cell-wider walk added unbuildable edge cells that made
+		// the gate unreachable at low render distance (see the RD5 stall).
+		const maxRDNew: i32 = @as(i32, @intCast(rd))*chunk.chunkSize << lod;
+		const minX = px -% maxRDNew & invMask;
+		const maxX = px +% maxRDNew +% sz & invMask;
+		var cx = minX;
+		while (cx != maxX) : (cx +%= sz) {
+			const minY = py -% maxRDNew & invMask;
+			const maxY = py +% maxRDNew +% sz & invMask;
+			var cy = minY;
+			while (cy != maxY) : (cy +%= sz) {
 				// Vertical: the column of chunk(s) around the player's height.
-				const cz = pz & ~(sz - 1);
-				if (!boxInRenderVolume(px, py, rd, cx, cy, @as(i64, cx) + sz, @as(i64, cy) + sz)) continue;
+				const cz = pz & ~mask;
 				total += 1;
 				const node = getNodePointer(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
 				if (node.mesh.load(.acquire)) |mesh| {

@@ -63,6 +63,12 @@ pub const ChannelChunk = struct { // MARK: ChannelChunk
 		memoryPool.destroy(self);
 	}
 
+	/// Resets the channel to zero light. Used to re-run sun propagation when a
+	/// mesh is relit after its lightmap fragment arrived (see ChunkMesh.refreshSunLight).
+	pub fn clear(self: *ChannelChunk) void {
+		self.data.fillUniform(.{.r = 0, .g = 0, .b = 0});
+	}
+
 	const Entry = struct {
 		pos: BlockPos,
 		value: [3]u8,

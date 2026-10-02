@@ -300,6 +300,7 @@ pub fn update() void {
 				main.ashframe_client.setWorldRevealed(false);
 				hideConnectingDialog();
 				warmT0 = 0;
+				main.ashframe_client.noteWarmingStart(0); // seeded on first .warming tick
 				loadIndeterminate = false; // now measurable
 				setLoadStatus("Loading chunks...");
 				state.store(.warming, .release);
@@ -312,21 +313,27 @@ pub fn update() void {
 		},
 		.warming => {
 			// --- ASHFRAME CUSTOM CLIENT (clean join): the fullscreen overlay
-			// draws the status + bar. We compute the state and reveal the world
-			// ONCE genuinely ready; if the safety cap elapses first we keep
-			// waiting (never reveal a bare/mis-lit world) and just say so. ---
+			// draws the status + bar. We reveal the world once coverage is met;
+			// a hard safety cap (ashframe_client.worldRevealCapMs) force-reveals
+			// anyway, so the join can never stall forever. ---
 			const nowMs = main.timestamp().toMilliseconds();
-			if (warmT0 == 0) warmT0 = nowMs;
+			if (warmT0 == 0) {
+				warmT0 = nowMs;
+				main.ashframe_client.noteWarmingStart(nowMs);
+			}
 			const pp = main.game.Player.getPosBlocking();
 			const px: i32 = @intFromFloat(pp[0]);
 			const py: i32 = @intFromFloat(pp[1]);
 			const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
 			const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
-			const covered = (cov.total == 0 or cov.resident*10 >= cov.total*9) and
-				(meshCov.total == 0 or meshCov.resident*10 >= meshCov.total*9);
+			// 80%: a couple of still-loading far/near chunks must not block the
+			// join. Coverage is now RD/LOD-aware (see mesh_storage) so this is
+			// reachable at every render distance.
+			const covered = (cov.total == 0 or cov.resident*5 >= cov.total*4) and
+				(meshCov.total == 0 or meshCov.resident*5 >= meshCov.total*4);
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total, meshCov.resident, meshCov.total);
 			loadFraction = status.fraction;
-			const pastCap = nowMs -% warmT0 >= main.ashframe_client.warmCapMs;
+			const pastCap = nowMs -% warmT0 >= main.ashframe_client.warmCapMs and status.stage != .ready;
 			const stageText: []const u8 = if (pastCap)
 				"Taking longer than usual..."
 			else switch (status.stage) {
@@ -351,6 +358,7 @@ pub fn update() void {
 			}
 			// Reveal so the opaque loading overlay lifts even on failure,
 			// otherwise the menu would stay hidden behind it.
+			main.ashframe_client.noteWarmingStart(0);
 			main.ashframe_client.setWorldRevealed(true);
 			window.suppressRender = false;
 			gui.closeWindowFromRef(&window);
@@ -361,6 +369,7 @@ pub fn update() void {
 		.cancelled => {
 			// Reveal so the opaque loading overlay lifts and the menu is
 			// usable again after a cancel.
+			main.ashframe_client.noteWarmingStart(0);
 			main.ashframe_client.setWorldRevealed(true);
 			window.suppressRender = false;
 			gui.closeWindowFromRef(&window);

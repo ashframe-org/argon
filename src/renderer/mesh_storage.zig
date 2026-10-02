@@ -868,27 +868,44 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 	// the stock unlock/defer-lock idiom so the lock stays balanced. ---
 	if (updatableList.items.len != 0 and targetTime.durationTo(main.timestamp()).nanoseconds < 0) {
 		const playerPos = game.Player.getEyePosBlocking();
-		// Stable-ish nearest-first order computed once, in place (the list
-		// is scratch data owned by us). pdq sort is descending by priority.
+		// Sort ascending by priority; we then walk from the end (highest
+		// priority = nearest) so meshes closest to the player are built
+		// first. In-place on our own scratch list; bounded by the pending
+		// set now that entries are removed as they are handled. pdq is fast
+		// and stable enough here since priorities rarely tie exactly.
 		std.sort.pdq(chunk.ChunkPosition, updatableList.items, playerPos, struct {
 			fn gt(pos: Vec3d, a: chunk.ChunkPosition, b: chunk.ChunkPosition) bool {
-				return a.getPriority(pos) > b.getPriority(pos);
+				return a.getPriority(pos) < b.getPriority(pos);
 			}
 		}.gt);
-		var i: usize = 0;
-		while (i < updatableList.items.len) {
+		// --- ASHFRAME CUSTOM (perf FIX): process from the END and swapRemove
+		// every entry we've handled (or that no longer needs work), so the
+		// list only ever holds genuinely-pending meshes. The previous version
+		// only `continue`d past finished entries, leaving them in the list
+		// forever - it then re-sorted an ever-growing list every frame, which
+		// is what collapsed FPS at high render distance. Stock drained the
+		// list; restore that behavior. ---
+		var i: usize = updatableList.items.len;
+		while (i > 0) {
+			i -= 1;
 			const pos = updatableList.items[i];
 			if (!isInRenderDistance(pos)) {
 				_ = updatableList.swapRemove(i);
 				continue;
 			}
-			i += 1;
 			const node = getNodePointer(pos);
-			if (node.finishedMeshing) continue;
-			const mesh = getMesh(pos) orelse continue;
+			if (node.finishedMeshing) {
+				_ = updatableList.swapRemove(i);
+				continue;
+			}
+			const mesh = getMesh(pos) orelse {
+				_ = updatableList.swapRemove(i);
+				continue;
+			};
 			node.finishedMeshing = true;
 			mesh.finishedMeshing = true;
 			updateHigherLodNodeFinishedMeshing(pos, true);
+			_ = updatableList.swapRemove(i);
 			mutex.unlock();
 			defer mutex.lock();
 			mesh.uploadData();

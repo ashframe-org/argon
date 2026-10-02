@@ -55,9 +55,11 @@ const scopeCount = @typeInfo(Scope).@"enum".fields.len;
 
 var profUs: [scopeCount]i64 = @splat(0);
 var profCounts: [scopeCount]u32 = @splat(0);
-// Single active scope; the scopes we instrument never nest (the frame timer
-// is tracked separately to avoid that).
-var profActive: ?struct { scope: Scope, start: i64 } = null;
+// Scope stack (scopes DO nest: traversal contains serve/createNew, etc.).
+// A small fixed stack; overflow would only under-count, never crash.
+const profStackMax = 8;
+var profStack: [profStackMax]struct { scope: Scope, start: i64 } = undefined;
+var profStackLen: usize = 0;
 var profLastLogMs: i64 = 0;
 // Frame timing is measured directly (not via the scope stack) because the
 // other scopes run inside the frame.
@@ -75,13 +77,16 @@ fn nowNs() i64 {
 
 pub fn profBegin(scope: Scope) void {
 	if (!main.settings.launchConfig.ashframeDebug) return;
-	profActive = .{.scope = scope, .start = nowNs()};
+	if (profStackLen >= profStackMax) return; // saturate: drop nested (rare)
+	profStack[profStackLen] = .{.scope = scope, .start = nowNs()};
+	profStackLen += 1;
 }
 
 pub fn profEnd() void {
 	if (!main.settings.launchConfig.ashframeDebug) return;
-	const a = profActive orelse return;
-	profActive = null;
+	if (profStackLen == 0) return;
+	profStackLen -= 1;
+	const a = profStack[profStackLen];
 	const idx = @intFromEnum(a.scope);
 	profUs[idx] += nowNs() - a.start;
 	profCounts[idx] +%= 1;

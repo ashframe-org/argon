@@ -1627,17 +1627,15 @@ const PrefetchTask = struct {
 		var chunks: u32 = 0;
 		var frags: u32 = 0;
 		const t0 = main.timestamp().toMilliseconds();
-		// Near chunks: scale the warm radius with the render distance so a low
-		// RD does not pay for a huge far volume it will never draw. Always warm
-		// at least ±192 (the near-field box the reveal gate measures); coarse
-		// LODs (vs>=8, the far field) get the larger of ±768 or the RD extent.
-		const rdBlocks: i32 = @as(i32, @intCast(main.settings.renderDistance))*32;
-		const nearHalf: i32 = @max(192, @min(768, rdBlocks));
-		const farHalf: i32 = @max(768, rdBlocks);
+		// Near chunks: ±192 blocks each axis (the near-field box the reveal
+		// gate measures), every LOD. Coarse LODs (vs>=8, the far field) get
+		// ±768: only ~250 extra positions, warms far geometry nearly free.
+		// Do NOT scale these up with render distance: that multiplied the
+		// lod0 count ~8x (15625 vs 2197 at RD12) and flooded the warm pass.
 		for (0..@as(usize, main.settings.highestLod) + 1) |_lod| {
 			const lod: u5 = @intCast(_lod);
 			const vs: u31 = @as(u31, 1) << lod;
-			const half: i32 = if (vs >= 8) farHalf else nearHalf;
+			const half: i32 = if (vs >= 8) 768 else 192;
 			const cs: i32 = 32*@as(i32, @intCast(vs));
 			var x = (self.px - half) & ~(cs - 1);
 			const maxX = (self.px + half) & ~(cs - 1);

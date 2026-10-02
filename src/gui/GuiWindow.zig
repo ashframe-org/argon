@@ -56,6 +56,10 @@ hideIfMouseIsGrabbed: bool = true, // TODO: Allow the user to change this with a
 closeIfMouseIsGrabbed: bool = false,
 closeable: bool = true,
 isHud: bool = false,
+/// When true the window is kept open (so its update() still runs) but
+/// not drawn. Used by the clean-join overlay: the connecting dialog must
+/// keep driving its state machine while the fullscreen overlay hides it.
+suppressRender: bool = false,
 titleBar: ?*GuiComponent.HorizontalList = null,
 
 shiftClickableInventory: ?main.items.Inventory.ClientInventory = null,
@@ -536,6 +540,7 @@ pub fn drawIcons(self: *const GuiWindow) void {
 
 pub fn render(self: *const GuiWindow, mousePosition: Vec2f) void {
 	if (self.hideIfMouseIsGrabbed and main.Window.grabbed) return;
+	if (self.suppressRender) return;
 	const oldTranslation = draw.setTranslation(self.pos);
 	const oldScale = draw.setScale(self.scale);
 	if (self.hasBackground) {

@@ -87,6 +87,7 @@ pub fn start(_ip: []const u8, manager: *ConnectionManager) void {
 	loadStatusText = "Connecting...";
 	loadFraction = 0;
 	loadIndeterminate = true; // handshake phase has no measurable % yet
+	window.suppressRender = false; // show the dialog for the handshake phase
 	// Persist the dial address now (while `ip` is valid): the dialog may be
 	// closed early when the fullscreen overlay takes over, freeing `ip`.
 	main.globalAllocator.free(settings.lastUsedIPAddress);
@@ -151,6 +152,7 @@ fn finishConnect() void {
 	// --- ASHFRAME CUSTOM CLIENT (clean join): reveal the world only now,
 	// once the load gate has passed. ---
 	main.ashframe_client.setWorldRevealed(true);
+	window.suppressRender = false; // restore normal rendering for next time
 	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	gui.closeWindowFromRef(&window);
 	// lastUsedIPAddress is saved in start() (ip may be freed by then).
@@ -161,12 +163,12 @@ fn finishConnect() void {
 }
 // --- ASHFRAME CUSTOM CLIENT ---
 
-/// Hide the small connecting dialog once the fullscreen overlay takes over,
-/// so it cannot draw over the overlay. Other windows are left as-is: they sit
-/// behind the opaque overlay anyway, and `multiplayer_join` must survive so a
-/// cancel can return the player to it.
+/// Hide the small connecting dialog once the fullscreen overlay takes over.
+/// IMPORTANT: we must NOT close the window - its update() drives the whole
+/// load state machine (and is only called while it is open). Instead we
+/// suppress only its rendering; it stays open and keeps updating underneath.
 fn hideConnectingDialog() void {
-	gui.closeWindowFromRef(&window);
+	window.suppressRender = true;
 }
 
 /// Fullscreen loading screen drawn in RAW screen space (called before the GUI
@@ -347,6 +349,7 @@ pub fn update() void {
 			// Reveal so the opaque loading overlay lifts even on failure,
 			// otherwise the menu would stay hidden behind it.
 			main.ashframe_client.setWorldRevealed(true);
+			window.suppressRender = false;
 			gui.closeWindowFromRef(&window);
 			gui.windowlist.multiplayer_join.restoreConnection(connectionManager.?);
 			main.gui.windowlist.notification.raiseNotification("Encountered error while opening world: {s}", .{errorMessage});
@@ -356,6 +359,7 @@ pub fn update() void {
 			// Reveal so the opaque loading overlay lifts and the menu is
 			// usable again after a cancel.
 			main.ashframe_client.setWorldRevealed(true);
+			window.suppressRender = false;
 			gui.closeWindowFromRef(&window);
 			gui.windowlist.multiplayer_join.restoreConnection(connectionManager.?);
 		},

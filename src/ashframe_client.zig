@@ -24,7 +24,7 @@ pub fn timingMark(stage: []const u8) void {
 	if (!main.settings.launchConfig.ashframeDebug) return;
 	const now = main.timestamp().toMilliseconds();
 	if (timingStartMs == 0) timingReset();
-	std.log.info("[timing] {s}: +{d}ms (total {d}ms)", .{ stage, now - timingLastMs, now - timingStartMs });
+	std.log.info("[timing] {s}: +{d}ms (total {d}ms)", .{stage, now - timingLastMs, now - timingStartMs});
 	timingLastMs = now;
 }
 
@@ -226,7 +226,7 @@ pub fn checkAssetPack(packData: []const u8) PackStatus {
 	const dirPath = cacheDir(&dirBuf);
 	const cubyz = main.files.cubyzDir();
 	cubyz.makePath(dirPath) catch |err| {
-		std.log.err("Ashframe cache: could not create {s}: {s}", .{ dirPath, @errorName(err) });
+		std.log.err("Ashframe cache: could not create {s}: {s}", .{dirPath, @errorName(err)});
 		return .off;
 	};
 	var dir = cubyz.openDir(dirPath) catch return .off;
@@ -269,7 +269,7 @@ pub fn noteAssetsUnpacked(packData: []const u8) void {
 }
 
 fn chunkFileName(pos: main.chunk.ChunkPosition, buf: *[128]u8) []const u8 {
-	return std.fmt.bufPrint(buf, "c_{d}_{d}_{d}_{d}.bin", .{ pos.wx, pos.wy, pos.wz, pos.voxelSize }) catch "c_invalid.bin";
+	return std.fmt.bufPrint(buf, "c_{d}_{d}_{d}_{d}.bin", .{pos.wx, pos.wy, pos.wz, pos.voxelSize}) catch "c_invalid.bin";
 }
 
 /// Unique temp per call: duplicate in-flight tasks for the same chunk would
@@ -280,8 +280,8 @@ fn writeAtomic(dir: main.files.Dir, name: []const u8, data: []const u8) !void {
 	writeSeq +%= 1;
 	const seq = writeSeq;
 	var tmpBuf: [192]u8 = undefined;
-	const tmp = std.fmt.bufPrint(&tmpBuf, "{s}.{d}.{d}.tmp", .{ name, main.timestamp().toNanoseconds(), seq }) catch return error.OutOfMemory;
-	try dir.dir.writeFile(main.io, .{ .sub_path = tmp, .data = data });
+	const tmp = std.fmt.bufPrint(&tmpBuf, "{s}.{d}.{d}.tmp", .{name, main.timestamp().toNanoseconds(), seq}) catch return error.OutOfMemory;
+	try dir.dir.writeFile(main.io, .{.sub_path = tmp, .data = data});
 	try dir.dir.rename(tmp, dir.dir, name, main.io);
 }
 
@@ -309,7 +309,7 @@ fn chunkSpan(vs: u31) i32 {
 
 fn chunkRegionPath(wx: i32, wy: i32, wz: i32, vs: u31, buf: *[128]u8) ?[]const u8 {
 	const s = chunkSpan(vs);
-	return std.fmt.bufPrint(buf, "r_{d}_{d}_{d}_{d}.bin", .{ wx & ~(s - 1), wy & ~(s - 1), wz & ~(s - 1), vs }) catch null;
+	return std.fmt.bufPrint(buf, "r_{d}_{d}_{d}_{d}.bin", .{wx & ~(s - 1), wy & ~(s - 1), wz & ~(s - 1), vs}) catch null;
 }
 
 fn chunkRegionSlot(wx: i32, wy: i32, wz: i32, vs: u31) usize {
@@ -323,7 +323,7 @@ fn chunkRegionSlot(wx: i32, wy: i32, wz: i32, vs: u31) usize {
 
 fn lightRegionPath(wx: i32, wy: i32, vs: u31, buf: *[128]u8) ?[]const u8 {
 	const s: i32 = 1024*@as(i32, @intCast(vs));
-	return std.fmt.bufPrint(buf, "lm_{d}_{d}_{d}.bin", .{ wx & ~(s - 1), wy & ~(s - 1), vs }) catch null;
+	return std.fmt.bufPrint(buf, "lm_{d}_{d}_{d}.bin", .{wx & ~(s - 1), wy & ~(s - 1), vs}) catch null;
 }
 
 fn lightRegionSlot(wx: i32, wy: i32, vs: u31) usize {
@@ -430,7 +430,7 @@ fn rewriteRegion(dir: main.files.Dir, path: []const u8, n: usize, lens: *[64]u32
 		off += l;
 	}
 	writeAtomic(dir, path, buf) catch |err| {
-		std.log.err("Ashframe cache: region store {s}: {s}", .{ path, @errorName(err) });
+		std.log.err("Ashframe cache: region store {s}: {s}", .{path, @errorName(err)});
 	};
 }
 
@@ -601,7 +601,7 @@ var lastSweepMs: std.atomic.Value(i64) = .init(0);
 /// sweeps run at most once a minute on top of the store-count cadence.
 fn maybeSweep(dirPath: []const u8) void {
 	sweepCounter +%= 1;
-	if (sweepCounter % 2048 != 0) return;
+	if (sweepCounter%2048 != 0) return;
 	const nowMs = main.timestamp().toMilliseconds();
 	if (nowMs -% lastSweepMs.load(.monotonic) < 60*1000) return;
 	lastSweepMs.store(nowMs, .monotonic);
@@ -622,7 +622,7 @@ fn maybeSweep(dirPath: []const u8) void {
 		if (!std.mem.endsWith(u8, entry.name, ".bin")) continue;
 		const st = dir.dir.statFile(main.io, entry.name, .{}) catch continue;
 		const name = main.globalAllocator.dupe(u8, entry.name);
-		entries.append(.{ .name = name, .size = st.size });
+		entries.append(.{.name = name, .size = st.size});
 		total += st.size;
 	}
 	const cap = cacheMaxBytes();
@@ -928,7 +928,7 @@ fn readPut(name: []const u8, data: []const u8) void {
 	} else {
 		const key = gpa.dupe(u8, name);
 		const val = gpa.dupe(u8, data);
-		readCache.put(gpa.allocator, key, .{ .data = val, .lastUse = readTick }) catch {
+		readCache.put(gpa.allocator, key, .{.data = val, .lastUse = readTick}) catch {
 			gpa.free(key);
 			gpa.free(val);
 			return;
@@ -1107,7 +1107,7 @@ fn flushRam(force: bool) void {
 			// The RegionWriter only borrows these slices.
 		}
 		std.mem.sort(FlushWork, work.items, {}, FlushWork.lessThan);
-		var rw: RegionWriter = .{ .dir = d };
+		var rw: RegionWriter = .{.dir = d};
 		var i: usize = 0;
 		while (i < work.items.len) {
 			const w0 = work.items[i];
@@ -1195,7 +1195,7 @@ pub fn endServeBatch() void {
 	}
 	if (batchBlobs >= 50) {
 		const us: i64 = @intCast(@divTrunc(batchT0.durationTo(main.timestamp()).nanoseconds, 1000));
-		infoLog("serve: {d} blobs ({d} miss-skips) in {d}us", .{ batchBlobs, missSkips.swap(0, .acquire), us });
+		infoLog("serve: {d} blobs ({d} miss-skips) in {d}us", .{batchBlobs, missSkips.swap(0, .acquire), us});
 	}
 }
 
@@ -1265,14 +1265,14 @@ pub fn invalidateChunk(wx: i32, wy: i32, wz: i32) void {
 	defer dir.close();
 	flushMutex.lock();
 	defer flushMutex.unlock();
-	for ([_]u31{ 1, 2, 4, 8, 16, 32 }) |vs| {
+	for ([_]u31{1, 2, 4, 8, 16, 32}) |vs| {
 		const size: i32 = 32*@as(i32, @intCast(vs));
 		const mask: i32 = size - 1;
 		const cx = wx & ~mask;
 		const cy = wy & ~mask;
 		const cz = wz & ~mask;
 		var nameBuf: [128]u8 = undefined;
-		const name = chunkFileName(.{ .wx = cx, .wy = cy, .wz = cz, .voxelSize = vs }, &nameBuf);
+		const name = chunkFileName(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs}, &nameBuf);
 		ramRemove(name);
 		readRemove(name);
 		missClearEntry(name);
@@ -1284,7 +1284,7 @@ pub fn invalidateChunk(wx: i32, wy: i32, wz: i32) void {
 }
 
 fn lightMapFileName(wx: i32, wy: i32, vs: u31, buf: *[128]u8) []const u8 {
-	return std.fmt.bufPrint(buf, "m_{d}_{d}_{d}.bin", .{ wx, wy, vs }) catch "m_invalid.bin";
+	return std.fmt.bufPrint(buf, "m_{d}_{d}_{d}.bin", .{wx, wy, vs}) catch "m_invalid.bin";
 }
 
 /// Stages a received lightmap fragment blob. Same contract as storeChunk.
@@ -1343,6 +1343,69 @@ fn invalidateLightMapIn(dir: main.files.Dir, x: i32, y: i32, vs: u31) void {
 /// reveals already lit. Kicked once per session by the first teleport
 /// (spawn position); the reveal gate waits for completion or warmCapMs.
 pub const warmCapMs: i64 = 3000;
+
+// --- ASHFRAME CUSTOM CLIENT (clean join: reveal gate) ---
+/// While true, the main render loop keeps showing the menu/loading backdrop
+/// instead of the world, even though `game.world` is set. Set only by the
+/// connecting window's finishConnect (i.e. once the load gate passes), and
+/// cleared whenever a fresh load starts. This closes the "bare / wrong-lit
+/// first frame" hole where world assignment happens before readiness.
+var worldRevealed: std.atomic.Value(bool) = .init(true);
+
+pub fn setWorldRevealed(v: bool) void {
+	worldRevealed.store(v, .release);
+}
+pub fn isWorldRevealed() bool {
+	return worldRevealed.load(.acquire);
+}
+// --- ASHFRAME CUSTOM CLIENT (clean join: reveal gate) ---
+
+// --- ASHFRAME CUSTOM CLIENT (clean join: staged load progress) ---
+// Single source of truth for "how close are we to being in the world".
+// The connecting overlay and the render gate both read this, so the world
+// is never shown before it is actually ready (no bare/mis-lit first frame).
+pub const LoadStage = enum(u8) { connecting, assets, lightmaps, time, ready };
+
+/// Progress weights per stage (sum = 100). Tuned so the bar moves steadily
+/// through the parts the player actually waits on.
+pub const StageProgress = struct {
+	pub const connecting: f32 = 0.10;
+	pub const assets: f32 = 0.15;
+	pub const lightmaps: f32 = 0.60;
+	pub const time: f32 = 0.15;
+};
+
+pub const LoadStatus = struct {
+	/// 0.0 .. 1.0 overall progress toward being in the world.
+	fraction: f32,
+	/// Which phase we are currently in (for the overlay's status text).
+	stage: LoadStage,
+};
+
+/// Compute the current load progress from the live signals. `nowMs` is the
+/// caller's clock; `covered`/`covResident`/`covTotal` come from the mesh
+/// storage lightmap coverage query (callers own the world/player access).
+/// When inactive (not the Ashframe server) we report ready immediately so
+/// vanilla/other servers keep their stock (instant) reveal.
+pub fn loadStatus(nowMs: i64, covered: bool, covResident: usize, covTotal: usize) LoadStatus {
+	if (!isActive()) return .{.fraction = 1.0, .stage = .ready};
+	var frac: f32 = StageProgress.connecting; // handshake done by the time warming runs
+	// Assets: unpack/load is blocking on the main thread, so by the time we
+	// are here it is complete.
+	frac += StageProgress.assets;
+	// Lightmaps: near-fragment coverage (0/0 counts as done).
+	const covFrac: f32 = if (covTotal == 0) 1.0 else @min(1.0, @as(f32, @floatFromInt(covResident))/@as(f32, @floatFromInt(covTotal)));
+	const warmFrac: f32 = if (isWarmupDone()) 1.0 else 0.35;
+	const lm = @max(warmFrac, covFrac);
+	frac += StageProgress.lightmaps*lm;
+	// Time: all-or-nothing (a single packet).
+	const clockOk = isTimeSynced();
+	frac += StageProgress.time*(if (clockOk) @as(f32, 1.0) else 0.0);
+	const ready = isWarmupDone() and firstServeReady(nowMs) and covered and clockOk;
+	const stage: LoadStage = if (ready) .ready else if (!clockOk) .time else .lightmaps;
+	return .{.fraction = if (ready) 1.0 else @min(frac, 0.99), .stage = stage};
+}
+// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 var prefetchKicked: std.atomic.Value(bool) = .init(false);
 var prefetchDoneFlag: std.atomic.Value(bool) = .init(true);
 var prefetchGen: u64 = 0;
@@ -1358,7 +1421,7 @@ pub fn kickPrefetch(px: i32, py: i32, pz: i32) void {
 	if (prefetchKicked.swap(true, .acq_rel)) return;
 	prefetchDoneFlag.store(false, .release);
 	const task = main.globalAllocator.create(PrefetchTask);
-	task.* = .{ .px = px, .py = py, .pz = pz, .gen = prefetchGen };
+	task.* = .{.px = px, .py = py, .pz = pz, .gen = prefetchGen};
 	main.threadPool.addTask(task, &PrefetchTask.vtable);
 }
 
@@ -1425,7 +1488,7 @@ const PrefetchTask = struct {
 					const maxZ = (self.pz + half) & ~(cs - 1);
 					while (z <= maxZ) : (z += cs) {
 						if (!self.isStillNeeded()) return;
-						warmChunk(.{ .wx = x, .wy = y, .wz = z, .voxelSize = vs });
+						warmChunk(.{.wx = x, .wy = y, .wz = z, .voxelSize = vs});
 						chunks += 1;
 					}
 				}
@@ -1450,7 +1513,7 @@ const PrefetchTask = struct {
 				}
 			}
 		}
-		infoLog("prefetch: {d} chunks + {d} frags in {d}ms", .{ chunks, frags, main.timestamp().toMilliseconds() - t0 });
+		infoLog("prefetch: {d} chunks + {d} frags in {d}ms", .{chunks, frags, main.timestamp().toMilliseconds() - t0});
 		prefetchDoneFlag.store(true, .release);
 	}
 

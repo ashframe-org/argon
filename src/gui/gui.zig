@@ -634,6 +634,10 @@ pub fn updateAndRenderGui() void {
 			window.render(mousePos);
 		}
 		inventory.render(mousePos);
+		// --- ASHFRAME CUSTOM CLIENT (clean join): fullscreen loading
+		// overlay with progress, held until the world is revealed. ---
+		windowlist.connecting.renderOverlay();
+		// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	}
 	const oldScale = draw.setScale(scale);
 	defer draw.restoreScale(oldScale);

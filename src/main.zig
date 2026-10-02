@@ -498,13 +498,18 @@ pub fn clientMain() void { // MARK: clientMain()
 		}
 
 		if (!isHidden) {
-			if (game.world != null) {
+			// --- ASHFRAME CUSTOM CLIENT (clean join): hold the backdrop
+			// (not the world) until the load gate reveals it, so the first
+			// world frame is already lit/ready - no bare/flashing frame. ---
+			const revealWorld = game.world == null or ashframe_client.isWorldRevealed();
+			if (game.world != null and revealWorld) {
 				renderer.updateFov(settings.fov);
 				renderer.render(game.Player.getEyePosBlocking(), deltaTime);
 			} else {
 				renderer.updateFov(70.0);
 				renderer.MenuBackGround.render(deltaTime);
 			}
+			// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 			// --- ASHFRAME (Argon sign icons): safe to generate block-item
 			// icons here (GUI pass). No-op once cached. ---
 			if (game.world != null) block_entity.BlockEntityTypes.@"cubyz:sign".warmSignIcons();

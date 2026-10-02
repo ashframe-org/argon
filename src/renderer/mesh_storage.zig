@@ -78,6 +78,21 @@ var cachedPz: i32 = std.math.minInt(i32);
 var cachedRD: u16 = 0;
 var cachedGen: u64 = 0;
 var visibilityGen: u64 = 0;
+/// Camera view direction when the visible set was last computed. The frustum
+/// depends on view direction, so the cache must invalidate when the player
+/// looks around - otherwise turning reveals chunks that were never selected
+/// (the "chunks don't load until you move" bug). Compared by dot product with
+/// a small angular threshold so turning a little still hits the cache.
+var cachedViewDir: main.vec.Vec3f = .{0, 0, 1};
+/// Framebuffer width when the visible set was last computed: the frustum's
+/// horizontal half-angle depends on the aspect ratio, so a resolution change
+/// must also invalidate (rare; cheap to check).
+var cachedAspectW: u31 = 0;
+// cos(threshold) ~= 0.866 = 30 degrees. Re-running the BFS is itself a
+// ~250ms hitch at RD12, so we don't want to trigger it every few degrees
+// while looking around; 30 degrees bounds the "chunks appear slightly after
+// you turn" lag while keeping turns free of many hitches.
+const viewDirCacheCos: f32 = 0.866;
 /// visibilityGen at the time the neighbor-LOD loop last ran. The loop only
 /// needs to re-run when some node's meshed/LOD state changed since then.
 var lastNbrLodGen: u64 = std.math.maxInt(u64);
@@ -133,6 +148,8 @@ pub fn init() void { // MARK: init()
 	cachedPz = std.math.minInt(i32);
 	cachedRD = 0;
 	cachedGen = 0;
+	cachedViewDir = .{0, 0, 1};
+	cachedAspectW = 0;
 	visibilityGen = 0;
 }
 
@@ -159,6 +176,8 @@ pub fn deinit() void {
 	cachedPz = std.math.minInt(i32);
 	cachedRD = 0;
 	cachedGen = 0;
+	cachedViewDir = .{0, 0, 1};
+	cachedAspectW = 0;
 	visibilityGen = 0;
 
 	updatableList.clearAndFree(main.globalAllocator);
@@ -702,8 +721,17 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	const qx: i32 = playerPosInt[0];
 	const qy: i32 = playerPosInt[1];
 	const qz: i32 = playerPosInt[2];
+	// Current camera view direction (same derivation as Frustum.init).
+	const viewDir: main.vec.Vec3f = blk: {
+		const inv = main.game.camera.viewMatrix.transpose();
+		const d = main.vec.xyz(inv.mulVec(main.vec.Vec4f{0, 1, 0, 1}));
+		const len = @sqrt(@reduce(.Add, d*d));
+		break :blk if (len > 0) d/@as(main.vec.Vec3f, @splat(len)) else d;
+	};
+	const viewDirUnchanged = @reduce(.Add, viewDir*cachedViewDir) >= viewDirCacheCos;
 	const cacheValid = cachedPx == qx and cachedPy == qy and cachedPz == qz and
-		cachedRD == renderDistance and cachedGen == visibilityGen;
+		cachedRD == renderDistance and cachedGen == visibilityGen and viewDirUnchanged and
+		cachedAspectW == main.renderer.lastWidth;
 
 	var nodeList: main.ListManaged(*ChunkMeshNode) = .initCapacity(main.stackAllocator, 1024);
 	defer nodeList.deinit();
@@ -814,6 +842,8 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 		cachedPz = qz;
 		cachedRD = renderDistance;
 		cachedGen = visibilityGen;
+		cachedViewDir = viewDir;
+		cachedAspectW = main.renderer.lastWidth;
 	}
 	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
 	main.ashframe_client.profBegin(.neighborLod);

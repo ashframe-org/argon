@@ -158,8 +158,9 @@ fn finishConnect() void {
 		const py: i32 = @intFromFloat(pp[1]);
 		const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
 		const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
-		std.log.info("[ashframe] join reveal: warmup {d}ms | mesh {d}/{d} light {d}/{d}", .{
-			nowMs -% warmT0, meshCov.resident, meshCov.total, cov.resident, cov.total,
+		const ring = main.renderer.mesh_storage.nearMeshCoverageRadius(px, py, @intFromFloat(pp[2]), 3);
+		std.log.info("[ashframe] join reveal: warmup {d}ms | ring {d}/{d} | mesh {d}/{d} light {d}/{d}", .{
+			nowMs -% warmT0, ring.resident, ring.total, meshCov.resident, meshCov.total, cov.resident, cov.total,
 		});
 	}
 	// --- ASHFRAME CUSTOM CLIENT ---
@@ -342,14 +343,21 @@ pub fn update() void {
 			const pp = main.game.Player.getEyePosBlocking();
 			const px: i32 = @intFromFloat(pp[0]);
 			const py: i32 = @intFromFloat(pp[1]);
+			// --- ASHFRAME CUSTOM CLIENT (loading speed): judge readiness only
+			// on the IMMEDIATE area (a small disk of chunks), not the whole
+			// render disk. Waiting for 80% of the entire RD-scaled volume took
+			// many seconds at RD12 (frames are ~1s during warmup), so every join
+			// hit the 8s cap. Requiring the close ring instead reveals the world
+			// as soon as it is actually usable, then streams the rest outward
+			// (like vanilla). The full-disk numbers are still logged at reveal
+			// for diagnostics. ---
+			const gateRadiusChunks: i32 = 3;
 			const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
-			const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
-			// 80%: a couple of still-loading far/near chunks must not block the
-			// join. Coverage counts exactly the built near-field set (see
-			// mesh_storage.forEachBuiltNearMeshCell), so this is reachable at
-			// every render distance.
+			const meshCov = main.renderer.mesh_storage.nearMeshCoverageRadius(px, py, @intFromFloat(pp[2]), gateRadiusChunks);
+			// Mesh: 100% of the close ring (it is small and always buildable).
+			// Light: 80% (a single missing fragment must not block the join).
 			const covered = (cov.total == 0 or cov.resident*5 >= cov.total*4) and
-				(meshCov.total == 0 or meshCov.resident*5 >= meshCov.total*4);
+				(meshCov.total == 0 or meshCov.resident >= meshCov.total);
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total, meshCov.resident, meshCov.total);
 			loadFraction = status.fraction;
 			// Match the text threshold to the actual reveal cap so the UI does

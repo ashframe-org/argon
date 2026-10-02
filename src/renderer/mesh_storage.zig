@@ -845,7 +845,12 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	// Neighbor-LOD only changes when some node's meshed state changed
 	// (`visibilityGen`). Skip the whole per-node recompute otherwise - it was
 	// ~140ms/frame of pure repeated work while idle. ---
-	if (visibilityGen != lastNbrLodGen) {
+	// --- ASHFRAME CUSTOM CLIENT (loading speed): while the world is hidden by
+	// the join overlay this recompute is purely visual (seam flags) and, with
+	// meshes finishing every frame during warmup, it re-ran over the whole
+	// growing node list every frame (a large part of the ~1s warmup frames).
+	// Skip it while hidden; it runs once the world is revealed. ---
+	if (main.ashframe_client.isWorldRevealed() and visibilityGen != lastNbrLodGen) {
 		lastNbrLodGen = visibilityGen;
 		for (nodeList.items) |node| {
 			const pos = node.pos;
@@ -1198,22 +1203,31 @@ fn boxInRenderVolume(px: i32, py: i32, rd: i32, minX: i64, minY: i64, maxX: i64,
 /// (the near-field column the reveal gate measures). This keeps the gate on
 /// the near surface column while restricting the (x,y) footprint to the DISK
 /// `createNewMeshes` actually builds, so `resident` can reach `total`.
-fn forEachBuiltNearMeshCell(px: i32, py: i32, pz: i32, rd: u16, comptime Ctx: type, ctx: Ctx, comptime cb: fn (Ctx, chunk.ChunkPosition) void) void {
+/// `radiusChunks`: if > 0, restrict the walk to a small DISK of that many
+/// chunks (used by the reveal gate so the player waits only for the immediate
+/// area, not the whole render disk). 0 = full render distance.
+fn forEachBuiltNearMeshCell(px: i32, py: i32, pz: i32, rd: u16, radiusChunks: i32, comptime Ctx: type, ctx: Ctx, comptime cb: fn (Ctx, chunk.ChunkPosition) void) void {
 	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const vs: u31 = @as(u31, 1) << lod;
 		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
 		const mask: i32 = sz - 1;
 		const invMask: i32 = ~mask;
-		const maxRD: i32 = @as(i32, @intCast(rd))*chunk.chunkSize << lod;
+		// Effective radius in blocks: the inner reveal disk (if set) scaled per
+		// LOD, else the full render distance for this LOD. Both scale by `vs`
+		// the same way, so the walked cell count per LOD is identical.
+		const radius: i32 = if (radiusChunks > 0)
+			radiusChunks*chunk.chunkSize*@as(i32, @intCast(vs))
+		else
+			@as(i32, @intCast(rd))*chunk.chunkSize << lod;
 
-		const minX = px -% maxRD & invMask;
-		const maxX = px +% maxRD +% sz & invMask;
+		const minX = px -% radius & invMask;
+		const maxX = px +% radius +% sz & invMask;
 		var cx = minX;
 		while (cx != maxX) : (cx +%= sz) {
 			var deltaX: i64 = @abs(cx +% @divTrunc(sz, 2) -% px);
 			deltaX = @max(0, deltaX - @divTrunc(sz, 2));
-			const maxYRD: i32 = reduceRenderDistance(maxRD, deltaX);
+			const maxYRD: i32 = reduceRenderDistance(radius, deltaX);
 
 			const minY = py -% maxYRD & invMask;
 			const maxY = py +% maxYRD +% sz & invMask;
@@ -1234,7 +1248,9 @@ fn forEachBuiltNearMeshCell(px: i32, py: i32, pz: i32, rd: u16, comptime Ctx: ty
 	}
 }
 
-pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
+/// `radiusChunks`: 0 = full render disk (used for reporting); > 0 = inner disk
+/// (used by the reveal gate so the player waits only for the immediate area).
+pub fn nearMeshCoverageRadius(px: i32, py: i32, pz: i32, radiusChunks: i32) NearCoverage {
 	const rd: u16 = if (lastRD != 0) lastRD else settings.renderDistance;
 	const Ctx = struct {
 		total: u32 = 0,
@@ -1248,8 +1264,12 @@ pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
 		}
 	};
 	var ctx = Ctx{};
-	forEachBuiltNearMeshCell(px, py, pz, rd, *Ctx, &ctx, Ctx.cb);
+	forEachBuiltNearMeshCell(px, py, pz, rd, radiusChunks, *Ctx, &ctx, Ctx.cb);
 	return .{.total = ctx.total, .resident = ctx.resident};
+}
+
+pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
+	return nearMeshCoverageRadius(px, py, pz, 0);
 }
 
 pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {

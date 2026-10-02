@@ -168,9 +168,19 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	const ambient = @max(nightColor*@as(Vec3f, @splat(settings.nightBrightness)), @as(Vec3f, @splat(game.world.?.dayTime.ambientLight)));
 
 	itemdrop.ItemDisplayManager.update(deltaTime);
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling, gated by ashframeDebug) ---
+	main.ashframe_client.profFrameBegin();
+	// --- ASHFRAME CUSTOM CLIENT ---
 	renderWorld(game.world.?, ambient, game.world.?.dayTime.fog.skyColor, playerPosition);
 	const startTime = main.timestamp();
+	// --- ASHFRAME CUSTOM CLIENT ---
+	main.ashframe_client.profBegin(.updateMeshes);
 	mesh_storage.updateMeshes(startTime.addDuration(maximumMeshTime));
+	main.ashframe_client.profEnd();
+	// End the frame timer and emit/reset the ~1s summary.
+	main.ashframe_client.profFrameEndStart();
+	main.ashframe_client.profFrameEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 }
 
 pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Vec3f {
@@ -236,7 +246,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	chunk_meshing.quadsDrawn = 0;
 	chunk_meshing.transparentQuadsDrawn = 0;
+	// --- ASHFRAME CUSTOM CLIENT (perf) ---
+	main.ashframe_client.profBegin(.traversal);
 	const meshes = mesh_storage.updateAndGetRenderChunks(world.conn, &frustum, playerPos, settings.renderDistance);
+	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
 	const direction = crosshairDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight);
@@ -246,9 +260,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
 	defer for (chunkLists) |list| list.deinit();
+	// --- ASHFRAME CUSTOM CLIENT (perf) ---
+	main.ashframe_client.profBegin(.meshPrep);
 	for (meshes) |mesh| {
 		mesh.prepareRendering(&chunkLists);
 	}
+	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 	gpu_performance_measuring.stopQuery();
 	gpu_performance_measuring.startQuery(.chunk_rendering);
 	chunk_meshing.drawChunksIndirect(&chunkLists, ambientLight, false);
@@ -284,12 +302,16 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	{
 		for (&chunkLists) |*list| list.clearRetainingCapacity();
+		// --- ASHFRAME CUSTOM CLIENT (perf) ---
+		main.ashframe_client.profBegin(.transparentPrep);
 		var i: usize = meshes.len;
 		while (true) {
 			if (i == 0) break;
 			i -= 1;
 			meshes[i].prepareTransparentRendering(playerPos, &chunkLists);
 		}
+		main.ashframe_client.profEnd();
+		// --- ASHFRAME CUSTOM CLIENT ---
 		gpu_performance_measuring.stopQuery();
 		gpu_performance_measuring.startQuery(.transparent_rendering);
 		chunk_meshing.drawChunksIndirect(&chunkLists, ambientLight, true);

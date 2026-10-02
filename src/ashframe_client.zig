@@ -34,6 +34,132 @@ pub fn infoLog(comptime fmt: []const u8, args: anytype) void {
 	std.log.info("[ashframe] " ++ fmt, args);
 }
 
+// --- ASHFRAME CUSTOM CLIENT: per-frame CPU profiler (render thread). ---
+// The existing gpu_performance_measuring window only covers GPU time; our
+// render-distance regressions are CPU-side on the render thread. This tracks
+// named scopes (accumulated microseconds + call counts) each frame and can
+// emit a periodic [fps] summary. All gated behind `ashframeDebug`; when off,
+// begin/end are near-free (one bool branch) and no state is written.
+pub const Scope = enum(u8) {
+	traversal, // updateAndGetRenderChunks
+	updateMeshes, // updateMeshes
+	relight, // relightMeshesForFragment
+	relightCalls, // count of relight calls this frame (uses count[])
+	transparentPrep, // loop of prepareTransparentRendering
+	meshPrep, // loop of prepareRendering
+	freeOld, // freeOldMeshes
+	createNew, // createNewMeshes
+	serveBatch, // disk serve pass
+};
+const scopeCount = @typeInfo(Scope).@"enum".fields.len;
+
+var profUs: [scopeCount]i64 = @splat(0);
+var profCounts: [scopeCount]u32 = @splat(0);
+// Single active scope; the scopes we instrument never nest (the frame timer
+// is tracked separately to avoid that).
+var profActive: ?struct { scope: Scope, start: i64 } = null;
+var profLastLogMs: i64 = 0;
+// Frame timing is measured directly (not via the scope stack) because the
+// other scopes run inside the frame.
+var frameStartNs: i64 = 0;
+var frameCount: u32 = 0;
+var frameUs: i64 = 0;
+
+pub fn profEnabled() bool {
+	return main.settings.launchConfig.ashframeDebug;
+}
+
+fn nowNs() i64 {
+	return @intCast(main.timestamp().toNanoseconds());
+}
+
+pub fn profBegin(scope: Scope) void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	profActive = .{.scope = scope, .start = nowNs()};
+}
+
+pub fn profEnd() void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	const a = profActive orelse return;
+	profActive = null;
+	const idx = @intFromEnum(a.scope);
+	profUs[idx] += nowNs() - a.start;
+	profCounts[idx] +%= 1;
+}
+
+/// Adds a pure count under a scope (e.g. relight meshes refreshed).
+pub fn profCount(scope: Scope, n: u32) void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	profCounts[@intFromEnum(scope)] +%= n;
+}
+
+/// Frame boundaries (separate from the scope stack; scopes run inside).
+pub fn profFrameBegin() void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	frameStartNs = nowNs();
+}
+
+pub fn profFrameEndStart() void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	if (frameStartNs != 0) {
+		frameUs += nowNs() - frameStartNs;
+		frameCount +%= 1;
+	}
+}
+
+/// Call once per frame at the end of render(). Emits a summary roughly once
+/// a second and resets the accumulators.
+pub fn profFrameEnd() void {
+	if (!main.settings.launchConfig.ashframeDebug) return;
+	const nowMs = main.timestamp().toMilliseconds();
+	if (profLastLogMs == 0) profLastLogMs = nowMs;
+	if (nowMs -% profLastLogMs >= 1000) {
+		const framesDiv: i64 = @max(1, @as(i64, frameCount));
+		const fps: f32 = if (frameUs > 0) @as(f32, @floatFromInt(frameCount))*1_000_000.0/@as(f32, @floatFromInt(frameUs)) else 0;
+		std.log.info(
+			"[fps] {d:.0}fps frame {d}us | traversal {d}us | updateMeshes {d}us | relight {d}us ({d} calls, {d} meshes) | transpPrep {d}us | meshPrep {d}us | freeOld {d}us | createNew {d}us | serve {d}us",
+			.{
+				fps,
+				@divTrunc(frameUs, framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.traversal)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.updateMeshes)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.relight)], framesDiv),
+				profCounts[@intFromEnum(Scope.relight)],
+				profCounts[@intFromEnum(Scope.relightCalls)],
+				@divTrunc(profUs[@intFromEnum(Scope.transparentPrep)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.meshPrep)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.freeOld)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.createNew)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.serveBatch)], framesDiv),
+			},
+		);
+		profUs = @splat(0);
+		profCounts = @splat(0);
+		frameUs = 0;
+		frameCount = 0;
+		profLastLogMs = nowMs;
+	}
+}
+
+/// Snapshot for the on-screen profiler window.
+pub fn profSnapshot() struct { us: [scopeCount]i64, count: [scopeCount]u32, frameUs: i64, frameCount: u32 } {
+	return .{.us = profUs, .count = profCounts, .frameUs = frameUs, .frameCount = frameCount};
+}
+
+pub fn profScopeName(scope: Scope) []const u8 {
+	return switch (scope) {
+		.traversal => "Traversal",
+		.updateMeshes => "UpdateMeshes",
+		.relight => "Relight",
+		.relightCalls => "Relight calls",
+		.transparentPrep => "TransparentPrep",
+		.meshPrep => "MeshPrep",
+		.freeOld => "FreeOldMeshes",
+		.createNew => "CreateNewMeshes",
+		.serveBatch => "ServeBatch",
+	};
+}
+
 /// Remembers the typed server address. Called from the connecting window.
 /// Flushes first: any still-staged blobs belong to the previous session.
 pub fn noteDialAddress(ip: []const u8) void {

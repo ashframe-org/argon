@@ -106,4 +106,31 @@ pub fn render() void {
 		y += 8;
 	}
 	draw.print("Total: {} µs", .{@divTrunc(sum, 1000)}, 0, 0, 8);
+
+	// --- ASHFRAME CUSTOM CLIENT (perf): CPU render-thread scopes + counters.
+	// Only populated when `ashframeDebug` is on (the profiler is gated there),
+	// so this section is blank otherwise. Shown in the same window to keep
+	// CPU vs GPU costs side by side at RD5/RD12, idle/moving. ---
+	if (main.ashframe_client.profEnabled()) {
+		y += 8;
+		draw.print("#ffff00-- CPU (render thread, last frame) --", .{}, 0, y, 8);
+		y += 8;
+		const snap = main.ashframe_client.profSnapshot();
+		const framesDiv: i64 = @max(1, @as(i64, snap.frameCount));
+		draw.print("FPS(CPU): {d:.0}  frame {d} µs x{d}", .{
+			if (snap.frameUs > 0) @as(f32, @floatFromInt(snap.frameCount))*1_000_000.0/@as(f32, @floatFromInt(snap.frameUs)) else 0,
+			@divTrunc(snap.frameUs, framesDiv),
+			snap.frameCount,
+		}, 0, y, 8);
+		y += 8;
+		for (std.enums.values(main.ashframe_client.Scope)) |scope| {
+			const idx = @intFromEnum(scope);
+			if (scope == .relightCalls) {
+				draw.print("{s}: {}", .{main.ashframe_client.profScopeName(scope), snap.count[idx]}, 0, y, 8);
+			} else {
+				draw.print("{s}: {d} µs x{d}", .{main.ashframe_client.profScopeName(scope), @divTrunc(snap.us[idx], 1000), snap.count[idx]}, 0, y, 8);
+			}
+			y += 8;
+		}
+	}
 }

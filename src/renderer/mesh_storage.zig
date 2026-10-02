@@ -600,11 +600,20 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	lastPz = @trunc(playerPos[2]);
 	lastRD = renderDistance;
 	mutex.unlock();
+	// --- ASHFRAME CUSTOM CLIENT (perf) ---
+	main.ashframe_client.profBegin(.freeOld);
 	freeOldMeshes(olderPx, olderPy, olderPz, olderRD);
+	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	// --- ASHFRAME CUSTOM CLIENT: one dir handle + timing for the serve pass. ---
+	main.ashframe_client.profBegin(.serveBatch);
 	main.ashframe_client.beginServeBatch();
+	// --- ASHFRAME CUSTOM CLIENT (perf) ---
+	main.ashframe_client.profBegin(.createNew);
 	createNewMeshes(olderPx, olderPy, olderPz, olderRD, &meshRequests, &mapRequests);
+	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	// --- ASHFRAME CUSTOM CLIENT: serve lightmaps from disk if cached. ---
 	{
@@ -628,6 +637,8 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	}
 	// --- ASHFRAME CUSTOM CLIENT ---
 	main.ashframe_client.endServeBatch();
+	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT (perf) ---
 
 	// Make requests as soon as possible to reduce latency:
 	network.protocols.lightMapRequest.sendRequest(conn, mapRequests.items);
@@ -924,6 +935,11 @@ pub fn finishMesh(pos: chunk.ChunkPosition) void {
 // the deferred retry only handles unbuilt entries. Same-vs chunks in the
 // fragment's 256*vs box, all z in render range; missing meshes skip. ---
 fn relightMeshesForFragment(fx: i32, fy: i32, vs: u31) void {
+	// --- ASHFRAME CUSTOM CLIENT (perf): this box scan + per-hit task enqueue
+	// is the prime suspect for the render-distance FPS collapse; profile it. ---
+	main.ashframe_client.profBegin(.relight); // count = number of invocations
+	defer main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT ---
 	const span: i32 = 256*@as(i32, @intCast(vs));
 	const cs: i32 = 32*@as(i32, @intCast(vs));
 	const zExt: i32 = @as(i32, lastRD)*32*@as(i32, @intCast(vs));
@@ -936,6 +952,7 @@ fn relightMeshesForFragment(fx: i32, fy: i32, vs: u31) void {
 				const pos = chunk.ChunkPosition{.wx = x, .wy = y, .wz = z, .voxelSize = vs};
 				if (getMesh(pos) != null) {
 					ChunkMesh.scheduleLightRefresh(pos);
+					main.ashframe_client.profCount(.relightCalls, 1); // meshes scheduled
 				}
 			}
 		}

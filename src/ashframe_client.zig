@@ -1483,6 +1483,10 @@ fn invalidateLightMapIn(dir: main.files.Dir, x: i32, y: i32, vs: u31) void {
 /// reveals already lit. Kicked once per session by the first teleport
 /// (spawn position); the reveal gate waits for completion or warmCapMs.
 pub const warmCapMs: i64 = 3000;
+/// Safety cap on the connect prefetch; the intended set is ~3023 positions
+/// (±192 fine / ±768 coarse across the 6 LODs). If a radius change ever
+/// balloons it again, stop rather than flooding the disk/serve path.
+pub const maxPrefetchChunks: u32 = 8192;
 
 // --- ASHFRAME CUSTOM CLIENT (clean join: reveal gate) ---
 /// While true, the main render loop keeps showing the menu/loading backdrop
@@ -1647,6 +1651,11 @@ const PrefetchTask = struct {
 					const maxZ = (self.pz + half) & ~(cs - 1);
 					while (z <= maxZ) : (z += cs) {
 						if (!self.isStillNeeded()) return;
+						// Hard sanity cap: the warm pass exists to make the near
+						// field instant, not to enumerate a whole render volume.
+						// A radius regression once ballooned this to 18584
+						// positions and flooded the serve path; fail safe.
+						if (chunks >= maxPrefetchChunks) return;
 						warmChunk(.{.wx = x, .wy = y, .wz = z, .voxelSize = vs});
 						chunks += 1;
 					}

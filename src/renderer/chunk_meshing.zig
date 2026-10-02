@@ -1338,10 +1338,17 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 	// --------------------------------------------------------------------------------------------
 
 	pub fn scheduleLightRefresh(pos: chunk.ChunkPosition) void {
+		// Dedup: only enqueue if this mesh isn't already pending a refresh.
+		// Without the swap guard, the per-fragment relight sweep enqueued one
+		// task per (mesh x fragment-arrival), which avalanched into hundreds of
+		// thousands of redundant tasks and starved the mesh-upload loop.
 		if (mesh_storage.getMesh(pos)) |mesh| {
-			mesh.needsLightRefresh.store(true, .release);
+			if (!mesh.needsLightRefresh.swap(true, .acq_rel)) {
+				LightRefreshTask.schedule(pos);
+			}
+		} else {
+			LightRefreshTask.schedule(pos);
 		}
-		LightRefreshTask.schedule(pos);
 	}
 	const LightRefreshTask = struct {
 		pos: chunk.ChunkPosition,

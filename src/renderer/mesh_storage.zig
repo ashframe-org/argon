@@ -73,8 +73,6 @@ var mutex: main.utils.Mutex = .{};
 // still-missing positions, throttled so this never floods. ---
 var nearRerequestLastMs: i64 = 0;
 const nearRerequestIntervalMs: i64 = 1000;
-/// Slower cadence after the world is revealed (still catches dropped meshes).
-const nearRerequestIdleMs: i64 = 5000;
 const nearRerequestHalf: i32 = 192;
 
 // --- ASHFRAME CUSTOM CLIENT (perf: cache the visible-node traversal) ---
@@ -927,8 +925,23 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		mesh.uploadData();
 		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
 	}
+	// --- ASHFRAME CUSTOM CLIENT (liveness): upload freshly-finished meshes
+	// BEFORE the map/relight block. The relight sweep is unbudgeted; running it
+	// first could spend the whole frame and skip this loop, leaving the world
+	// empty while the render thread stayed busy. Uploading first guarantees the
+	// world fills regardless of relight load. ---
+	uploadFinishedMeshes(targetTime);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	var newMapsStored = false;
 	while (mapUpdatableList.popFront()) |map| {
+		// Budget the relight block too: each stored fragment runs a relight
+		// sweep. Stop draining once the frame budget is spent; remaining maps
+		// stay queued (updateLightMap already pushed them) for the next frame.
+		if (newMapsStored and targetTime.durationTo(main.timestamp()).nanoseconds >= 0) {
+			// Re-queue this one and stop; don't lose it.
+			mapUpdatableList.pushBack(map);
+			break;
+		}
 		if (!isMapInRenderDistance(map.pos)) {
 			map.deferredDeinit();
 		} else {
@@ -968,12 +981,25 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 				const inRange = isInRenderDistance(entry.pos);
 				if (!hasFragment and inRange) {
 					const fsize: i32 = @as(i32, LightMap.LightMapFragment.mapSize)*@as(i32, @intCast(entry.pos.voxelSize));
-					fragReqs.append(.{
+					const fpos = LightMap.MapFragmentPosition{
 						.wx = entry.pos.wx & ~(fsize - 1),
 						.wy = entry.pos.wy & ~(fsize - 1),
 						.voxelSize = entry.pos.voxelSize,
 						.voxelSizeShift = @intCast(std.math.log2_int(u31, entry.pos.voxelSize)),
-					});
+					};
+					// Dedup: many pending meshes share one fragment. Without this
+					// the scan emitted one request PER MESH (up to 512/frame for a
+					// handful of fragments), the server echoed each, and every echo
+					// re-ran the full relight sweep - a self-sustaining flood that
+					// starved mesh uploads. Only request genuinely-distinct fragments.
+					var dup = false;
+					for (fragReqs.items) |existing| {
+						if (existing.wx == fpos.wx and existing.wy == fpos.wy and existing.voxelSize == fpos.voxelSize) {
+							dup = true;
+							break;
+						}
+					}
+					if (!dup) fragReqs.append(fpos);
 				}
 				if (!inRange) {
 					main.globalAllocator.free(entry.data);
@@ -1011,59 +1037,58 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 			}
 		}
 	}
-	// --- ASHFRAME CUSTOM CLIENT ---
-	// --- ASHFRAME CUSTOM (perf): the stock loop rescanned the whole list to
-	// find the closest pending mesh, removed one, and repeated - O(n^2) on
-	// the render thread. Process the pending list nearest-first instead.
-	// Everything here runs while `mutex` is held (as the stock scan did);
-	// the mutex is dropped only around the GPU upload, once per mesh, using
-	// the stock unlock/defer-lock idiom so the lock stays balanced. ---
-	if (updatableList.items.len != 0 and targetTime.durationTo(main.timestamp()).nanoseconds < 0) {
-		const playerPos = game.Player.getEyePosBlocking();
-		// Sort ascending by priority; we then walk from the end (highest
-		// priority = nearest) so meshes closest to the player are built
-		// first. In-place on our own scratch list; bounded by the pending
-		// set now that entries are removed as they are handled. pdq is fast
-		// and stable enough here since priorities rarely tie exactly.
-		std.sort.pdq(chunk.ChunkPosition, updatableList.items, playerPos, struct {
-			fn gt(pos: Vec3d, a: chunk.ChunkPosition, b: chunk.ChunkPosition) bool {
-				return a.getPriority(pos) < b.getPriority(pos);
-			}
-		}.gt);
-		// --- ASHFRAME CUSTOM (perf FIX): process from the END and swapRemove
-		// every entry we've handled (or that no longer needs work), so the
-		// list only ever holds genuinely-pending meshes. The previous version
-		// only `continue`d past finished entries, leaving them in the list
-		// forever - it then re-sorted an ever-growing list every frame, which
-		// is what collapsed FPS at high render distance. Stock drained the
-		// list; restore that behavior. ---
-		var i: usize = updatableList.items.len;
-		while (i > 0) {
-			i -= 1;
-			const pos = updatableList.items[i];
-			if (!isInRenderDistance(pos)) {
-				_ = updatableList.swapRemove(i);
-				continue;
-			}
-			const node = getNodePointer(pos);
-			if (node.finishedMeshing) {
-				_ = updatableList.swapRemove(i);
-				continue;
-			}
-			const mesh = getMesh(pos) orelse {
-				_ = updatableList.swapRemove(i);
-				continue;
-			};
-			node.finishedMeshing = true;
-			mesh.finishedMeshing = true;
-			bumpVisibilityGen();
-			updateHigherLodNodeFinishedMeshing(pos, true);
-			_ = updatableList.swapRemove(i);
-			mutex.unlock();
-			defer mutex.lock();
-			mesh.uploadData();
-			if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
+}
+
+/// Uploads freshly-finished meshes (nearest first) within the frame budget.
+/// Called early from `updateMeshes` (before the unbudgeted relight sweep) so
+/// the world fills even when relighting is heavy. Runs with `mutex` held; the
+/// stock unlock/defer-lock idiom keeps the lock balanced around the upload.
+fn uploadFinishedMeshes(targetTime: std.Io.Timestamp) void {
+	if (updatableList.items.len == 0 or targetTime.durationTo(main.timestamp()).nanoseconds >= 0) return;
+	const playerPos = game.Player.getEyePosBlocking();
+	// Sort ascending by priority; we then walk from the end (highest
+	// priority = nearest) so meshes closest to the player are built
+	// first. In-place on our own scratch list; bounded by the pending
+	// set now that entries are removed as they are handled. pdq is fast
+	// and stable enough here since priorities rarely tie exactly.
+	std.sort.pdq(chunk.ChunkPosition, updatableList.items, playerPos, struct {
+		fn gt(pos: Vec3d, a: chunk.ChunkPosition, b: chunk.ChunkPosition) bool {
+			return a.getPriority(pos) < b.getPriority(pos);
 		}
+	}.gt);
+	// --- ASHFRAME CUSTOM (perf FIX): process from the END and swapRemove
+	// every entry we've handled (or that no longer needs work), so the
+	// list only ever holds genuinely-pending meshes. The previous version
+	// only `continue`d past finished entries, leaving them in the list
+	// forever - it then re-sorted an ever-growing list every frame, which
+	// is what collapsed FPS at high render distance. Stock drained the
+	// list; restore that behavior. ---
+	var i: usize = updatableList.items.len;
+	while (i > 0) {
+		i -= 1;
+		const pos = updatableList.items[i];
+		if (!isInRenderDistance(pos)) {
+			_ = updatableList.swapRemove(i);
+			continue;
+		}
+		const node = getNodePointer(pos);
+		if (node.finishedMeshing) {
+			_ = updatableList.swapRemove(i);
+			continue;
+		}
+		const mesh = getMesh(pos) orelse {
+			_ = updatableList.swapRemove(i);
+			continue;
+		};
+		node.finishedMeshing = true;
+		mesh.finishedMeshing = true;
+		bumpVisibilityGen();
+		updateHigherLodNodeFinishedMeshing(pos, true);
+		_ = updatableList.swapRemove(i);
+		mutex.unlock();
+		defer mutex.lock();
+		mesh.uploadData();
+		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
 	}
 }
 
@@ -1251,16 +1276,17 @@ pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 	return .{.total = total, .resident = resident};
 }
 
-/// Re-issue requests for near-field chunks/lightmaps that never arrived: a
-/// request the server deferred/dropped, or a mesh we deliberately dropped
-/// rather than build black. The client otherwise never retries once
-/// stationary. Runs once per `nearRerequestIntervalMs` while the join gate is
-/// active, and at the slower `nearRerequestIdleMs` afterwards.
-/// Render/main thread only.
+/// While the world is still hidden by the clean-join reveal gate, re-issue
+/// requests for near-field chunks/lightmaps that have not arrived. Bounded to
+/// once per `nearRerequestIntervalMs` and to the fixed near-field box the
+/// prefetch warms, so it only covers the area the gate actually measures.
+/// Once the world is revealed the normal pipeline (and movement) requests
+/// what's needed; re-requesting post-reveal kept re-triggering fragment
+/// arrivals and the relight sweep. Render/main thread only.
 fn rerequestMissingNearField(meshRequests: *main.ListManaged(chunk.ChunkPosition), mapRequests: *main.ListManaged(LightMap.MapFragmentPosition)) void {
+	if (main.ashframe_client.isWorldRevealed()) return;
 	const nowMs = main.timestamp().toMilliseconds();
-	const interval: i64 = if (main.ashframe_client.isWorldRevealed()) nearRerequestIdleMs else nearRerequestIntervalMs;
-	if (nowMs -% nearRerequestLastMs < interval) return;
+	if (nowMs -% nearRerequestLastMs < nearRerequestIntervalMs) return;
 	nearRerequestLastMs = nowMs;
 	const px = lastPx;
 	const py = lastPy;

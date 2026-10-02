@@ -23,9 +23,8 @@ Average of test sessions; `~` = approximate. Ranked best-on-the-right
 | Chunk download rate | ~7.6 MB/s ❌ | ~11.1 MB/s ✅ | ~7.6 MB/s 🟡 | ~11.1 MB/s ✅ |
 | Terrain-gen stall | ~162 ms/chunk ❌ | ~5 ms/chunk ✅ | ~162 ms/chunk ❌ | ~5 ms/chunk ✅ |
 | Revisit / teleport back | full re-stream ❌ | full re-stream ❌ | ~0.16 s ✅ | ~0.16 s ✅ |
-| Dark shadows / night flash | yes ❌ | yes ❌ | no ✅ | no ✅ |
 | Shop icons / click-to-buy | no ❌ | no ❌ | yes ✅ | yes ✅ |
-| Mentions / autocomplete / shop report | no ❌ | partial 🟡 | yes ✅ | yes ✅ |
+| Mentions / autocomplete | no ❌ | partial 🟡 | yes ✅ | yes ✅ |
 | Extra RAM | — ➖ | — ➖ | ~128 MB 🟡 | ~128 MB 🟡 |
 
 

@@ -498,18 +498,20 @@ pub fn clientMain() void { // MARK: clientMain()
 		}
 
 		if (!isHidden) {
-			// --- ASHFRAME CUSTOM CLIENT (clean join): hold the backdrop
-			// (not the world) until the load gate reveals it, so the first
-			// world frame is already lit/ready - no bare/flashing frame. ---
-			const revealWorld = game.world == null or ashframe_client.isWorldRevealed();
-			if (game.world != null and revealWorld) {
+			// --- ASHFRAME CUSTOM CLIENT (clean join): the world is ALWAYS
+			// rendered once assigned, because chunk/lightmap requests are
+			// issued from the render path (renderer.render ->
+			// updateAndGetRenderChunks). Gating the render would deadlock:
+			// the load gate waits on data that only loads via rendering.
+			// The fullscreen opaque overlay (connecting.renderOverlay)
+			// hides the world until the load gate passes, then lifts. ---
+			if (game.world != null) {
 				renderer.updateFov(settings.fov);
 				renderer.render(game.Player.getEyePosBlocking(), deltaTime);
 			} else {
 				renderer.updateFov(70.0);
 				renderer.MenuBackGround.render(deltaTime);
 			}
-			// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 			// --- ASHFRAME (Argon sign icons): safe to generate block-item
 			// icons here (GUI pass). No-op once cached. ---
 			if (game.world != null) block_entity.BlockEntityTypes.@"cubyz:sign".warmSignIcons();
@@ -531,6 +533,8 @@ pub fn clientMain() void { // MARK: clientMain()
 				world.deinit();
 				game.world = null;
 			}
+			// Defensive: never leave the loading overlay covering the menu.
+			ashframe_client.setWorldRevealed(true);
 			gui.openWindow("main");
 			audio.setMusic("cubyz:totaldemented/cubyz_remastered");
 		}

@@ -153,8 +153,10 @@ pub fn renderOverlay() void {
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
 	const draw = main.graphics.draw;
-	// Dim the whole screen so the backdrop/world behind is not distracting.
-	const oldColor = draw.setColor(0xc0000000);
+	// Fully opaque backdrop: the world keeps rendering behind this (so
+	// chunks/lightmaps load), but the player must not see the not-yet-ready
+	// world. Reveal = this overlay lifting in finishConnect.
+	const oldColor = draw.setColor(0xff10141a);
 	defer draw.restoreColor(oldColor);
 	draw.rect(.{0, 0}, screen);
 
@@ -276,12 +278,18 @@ pub fn update() void {
 				_ = future.await(main.io);
 				connectFuture = null;
 			}
+			// Reveal so the opaque loading overlay lifts even on failure,
+			// otherwise the menu would stay hidden behind it.
+			main.ashframe_client.setWorldRevealed(true);
 			gui.closeWindowFromRef(&window);
 			gui.windowlist.multiplayer_join.restoreConnection(connectionManager.?);
 			main.gui.windowlist.notification.raiseNotification("Encountered error while opening world: {s}", .{errorMessage});
 			errorMessage = "";
 		},
 		.cancelled => {
+			// Reveal so the opaque loading overlay lifts and the menu is
+			// usable again after a cancel.
+			main.ashframe_client.setWorldRevealed(true);
 			gui.closeWindowFromRef(&window);
 			gui.windowlist.multiplayer_join.restoreConnection(connectionManager.?);
 		},

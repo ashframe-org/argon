@@ -670,6 +670,9 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	}
 	var nodeList: main.ListManaged(*ChunkMeshNode) = .initCapacity(main.stackAllocator, 1024);
 	defer nodeList.deinit();
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+	main.ashframe_client.profBegin(.bfs);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	while (searchList.popFront()) |node| {
 		std.debug.assert(node.finishedMeshing);
 		std.debug.assert(node.active);
@@ -734,6 +737,10 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			nodeList.append(node);
 		}
 	}
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+	main.ashframe_client.profEnd(); // end BFS
+	main.ashframe_client.profBegin(.neighborLod);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	for (nodeList.items) |node| {
 		const pos = node.pos;
 		var isNeighborLod: [6]bool = @splat(false);
@@ -760,6 +767,10 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			mesh.uploadData();
 		}
 	}
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+	main.ashframe_client.profEnd(); // end neighborLod
+	main.ashframe_client.profBegin(.meshBuild);
+	// --- ASHFRAME CUSTOM CLIENT ---
 	for (nodeList.items) |node| {
 		node.rendered = false;
 		if (!node.finishedMeshing) continue;
@@ -775,6 +786,9 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			meshList.append(main.globalAllocator, mesh);
 		}
 	}
+	// --- ASHFRAME CUSTOM CLIENT (perf profiling) ---
+	main.ashframe_client.profEnd(); // end meshBuild
+	// --- ASHFRAME CUSTOM CLIENT ---
 
 	return meshList.items;
 }

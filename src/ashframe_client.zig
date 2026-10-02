@@ -50,6 +50,9 @@ pub const Scope = enum(u8) {
 	freeOld, // freeOldMeshes
 	createNew, // createNewMeshes
 	serveBatch, // disk serve pass
+	bfs, // visible-chunk hierarchy search (searchList loop)
+	neighborLod, // nodeList isNeighborLod / upload loop
+	meshBuild, // nodeList meshList build + empty removal
 };
 const scopeCount = @typeInfo(Scope).@"enum".fields.len;
 
@@ -122,11 +125,14 @@ pub fn profFrameEnd() void {
 		const framesDiv: i64 = @max(1, @as(i64, frameCount));
 		const fps: f32 = if (frameUs > 0) @as(f32, @floatFromInt(frameCount))*1_000_000.0/@as(f32, @floatFromInt(frameUs)) else 0;
 		std.log.info(
-			"[fps] {d:.0}fps frame {d}us | traversal {d}us | updateMeshes {d}us | relight {d}us ({d} calls, {d} meshes) | transpPrep {d}us | meshPrep {d}us | freeOld {d}us | createNew {d}us | serve {d}us",
+			"[fps] {d:.0}fps frame {d}us | traversal {d}us (bfs {d} + nbrLod {d} + meshBuild {d}) | updateMeshes {d}us | relight {d}us ({d} calls, {d} meshes) | transpPrep {d}us | meshPrep {d}us | freeOld {d}us | createNew {d}us | serve {d}us",
 			.{
 				fps,
 				@divTrunc(frameUs, framesDiv),
 				@divTrunc(profUs[@intFromEnum(Scope.traversal)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.bfs)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.neighborLod)], framesDiv),
+				@divTrunc(profUs[@intFromEnum(Scope.meshBuild)], framesDiv),
 				@divTrunc(profUs[@intFromEnum(Scope.updateMeshes)], framesDiv),
 				@divTrunc(profUs[@intFromEnum(Scope.relight)], framesDiv),
 				profCounts[@intFromEnum(Scope.relight)],
@@ -162,6 +168,9 @@ pub fn profScopeName(scope: Scope) []const u8 {
 		.freeOld => "FreeOldMeshes",
 		.createNew => "CreateNewMeshes",
 		.serveBatch => "ServeBatch",
+		.bfs => "BFS",
+		.neighborLod => "NeighborLod",
+		.meshBuild => "MeshBuild",
 	};
 }
 

@@ -295,7 +295,12 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	MeshSelection.render(playerPos);
 
 	// Render transparent chunk meshes:
-	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE5);
+	// --- ASHFRAME CUSTOM (flashing-translucent-squares fix): snapshot the
+	// depth into a separate texture and sample THAT, instead of reading the
+	// live depth attachment while depth-testing against it (a feedback loop
+	// that some drivers corrupt, especially at low resolution). ---
+	worldFrameBuffer.copyDepthForSampling();
+	worldFrameBuffer.bindSampledDepthTexture(c.GL_TEXTURE5);
 
 	gpu_performance_measuring.startQuery(.transparent_rendering_preparation);
 	c.glTextureBarrier();

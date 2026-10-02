@@ -133,8 +133,15 @@ void main() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 	float normalVariation = lightVariation(normal);
-	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
-	float dist = zFromDepth(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r);
+	// ASHFRAME (flashing translucent squares): guard the y-division. For
+	// fragments with mvVertexPos.y near 0 this produced inf/NaN, which turned
+	// whole fog-affected regions into large flashing solid-colour squares
+	// (worse at low resolution). Clamp the divisor to a sane minimum.
+	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/max(abs(mvVertexPos.y), 0.001);
+	// ASHFRAME: clamp the sampled depth to [0,1]; a driver returning an
+	// out-of-range/garbage depth here feeds NaN through the fog math.
+	float rawDepth = clamp(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r, 0.0, 1.0);
+	float dist = zFromDepth(rawDepth);
 	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fogData[int(animatedTextureIndex)].fogDensity, 1e10, 1e10);
 	float airFogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 	vec3 fogColor = unpackColor(fogData[int(animatedTextureIndex)].fogColor);

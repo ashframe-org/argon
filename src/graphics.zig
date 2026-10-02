@@ -1824,6 +1824,17 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	texture: c_uint,
 	hasDepthTexture: bool,
 	depthTexture: c_uint,
+	// --- ASHFRAME CUSTOM (fix flashing translucent squares): the transparent
+	// chunk pass sampled the live depth attachment (`depthTexture`) while that
+	// same attachment was bound for depth testing - a read-feedback loop. Some
+	// drivers (NVIDIA/AMD/Mesa, esp. at low resolution) return garbage from
+	// such reads, producing large flashing solid-color squares. `sampledDepth`
+	// is a separate texture the depth is blitted into before the transparent
+	// pass, so the shader samples a stable copy with no feedback. ---
+	sampledDepth: c_uint,
+	sampledDepthFbo: c_uint = 0,
+	sampledDepthW: u31 = 0,
+	sampledDepthH: u31 = 0,
 
 	pub fn init(self: *FrameBuffer, hasDepthTexture: bool, textureFilter: c_int, textureWrap: c_int) void {
 		self.* = FrameBuffer{
@@ -1831,6 +1842,7 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 			.texture = undefined,
 			.depthTexture = undefined,
 			.hasDepthTexture = hasDepthTexture,
+			.sampledDepth = undefined,
 		};
 		c.glGenFramebuffers(1, &self.frameBuffer);
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
@@ -1842,6 +1854,14 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, textureWrap);
 			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, textureWrap);
 			c.glFramebufferTexture2D(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D, self.depthTexture, 0);
+
+			// Separate copy target (sampled read-only during the transparent pass).
+			c.glGenTextures(1, &self.sampledDepth);
+			c.glBindTexture(c.GL_TEXTURE_2D, self.sampledDepth);
+			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
+			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
+			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
+			c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
 		}
 		c.glGenTextures(1, &self.texture);
 		c.glBindTexture(c.GL_TEXTURE_2D, self.texture);
@@ -1862,6 +1882,9 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 			// freed with glDeleteTextures - glDeleteRenderbuffers was wrong
 			// and leaked it on every teardown. ---
 			c.glDeleteTextures(1, &self.depthTexture);
+			// --- ASHFRAME CUSTOM (flashing-translucent-squares fix) ---
+			c.glDeleteTextures(1, &self.sampledDepth);
+			if (self.sampledDepthFbo != 0) c.glDeleteFramebuffers(1, &self.sampledDepthFbo);
 		}
 		c.glDeleteTextures(1, &self.texture);
 	}
@@ -1873,6 +1896,11 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 		if (self.hasDepthTexture) {
 			c.glBindTexture(c.GL_TEXTURE_2D, self.depthTexture);
 			c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_DEPTH_COMPONENT32F, width, height, 0, c.GL_DEPTH_COMPONENT, c.GL_FLOAT, null);
+			// --- ASHFRAME CUSTOM (flashing-translucent-squares fix) ---
+			c.glBindTexture(c.GL_TEXTURE_2D, self.sampledDepth);
+			c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_DEPTH_COMPONENT32F, width, height, 0, c.GL_DEPTH_COMPONENT, c.GL_FLOAT, null);
+			self.sampledDepthW = width;
+			self.sampledDepthH = height;
 		}
 
 		c.glBindTexture(c.GL_TEXTURE_2D, self.texture);
@@ -1906,6 +1934,37 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 		std.debug.assert(self.hasDepthTexture);
 		c.glActiveTexture(target);
 		c.glBindTexture(c.GL_TEXTURE_2D, self.depthTexture);
+	}
+
+	// --- ASHFRAME CUSTOM (flashing-translucent-squares fix) ---
+	/// Blit the depth attachment into the separate read-only `sampledDepth`
+	/// texture. Call after the opaque pass and before the transparent pass, so
+	/// the transparent shader samples a stable copy instead of the live
+	/// attachment it depth-tests against (a driver-fragile feedback loop).
+	pub fn copyDepthForSampling(self: *FrameBuffer) void {
+		std.debug.assert(self.hasDepthTexture);
+		// sampledDepth needs a draw FBO to be a blit target; create/cache one.
+		if (self.sampledDepthFbo == 0) {
+			c.glGenFramebuffers(1, &self.sampledDepthFbo);
+			c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.sampledDepthFbo);
+			c.glFramebufferTexture2D(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D, self.sampledDepth, 0);
+		}
+		var prevRead: c_int = undefined;
+		var prevDraw: c_int = undefined;
+		c.glGetIntegerv(c.GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+		c.glGetIntegerv(c.GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, self.frameBuffer);
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, self.sampledDepthFbo);
+		c.glBlitFramebuffer(0, 0, @intCast(self.sampledDepthW), @intCast(self.sampledDepthH), 0, 0, @intCast(self.sampledDepthW), @intCast(self.sampledDepthH), c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, @bitCast(prevRead));
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, @bitCast(prevDraw));
+	}
+
+	/// Bind the stable depth copy (not the live attachment) for sampling.
+	pub fn bindSampledDepthTexture(self: *const FrameBuffer, target: c_uint) void {
+		std.debug.assert(self.hasDepthTexture);
+		c.glActiveTexture(target);
+		c.glBindTexture(c.GL_TEXTURE_2D, self.sampledDepth);
 	}
 
 	pub fn bind(self: *const FrameBuffer) void {

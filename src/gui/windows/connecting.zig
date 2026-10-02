@@ -31,10 +31,23 @@ var errorMessage: []const u8 = "";
 // --- ASHFRAME CUSTOM CLIENT: reveal gate (status label + warm deadline). ---
 var statusLabel: ?*Label = null;
 var warmT0: i64 = 0;
-/// Last text we pushed to the label + last load fraction, so we only rebuild
-/// the TextBuffer when it actually changes (avoids per-frame churn).
-var loadStatusText: []const u8 = "";
+/// Current overlay status text + progress fraction. Owned here (module-level)
+/// so the fullscreen overlay can draw them independently of the connecting
+/// window's lifetime.
+/// Owned copy of the current status text (allocated); `"Connecting..."` and
+/// the other literals are restored by assigning without freeing, so we track
+/// whether the current value is ours to free.
+var loadStatusText: []const u8 = "Connecting...";
+var loadStatusOwned: bool = false;
 var loadFraction: f32 = 0;
+
+/// Set the overlay status text, freeing the previous owned copy.
+fn setLoadStatus(text: []const u8) void {
+	if (loadStatusOwned) main.globalAllocator.free(loadStatusText);
+	loadStatusText = main.globalAllocator.dupe(u8, text);
+	loadStatusOwned = true;
+	if (statusLabel) |lbl| lbl.updateText(loadStatusText);
+}
 // --- ASHFRAME CUSTOM CLIENT ---
 
 fn connectFromNewThread() void {
@@ -60,7 +73,12 @@ pub fn start(_ip: []const u8, manager: *ConnectionManager) void {
 	// --- ASHFRAME CUSTOM CLIENT (clean join): keep the backdrop up until
 	// the world is actually ready, so nothing jumps/flashes. ---
 	main.ashframe_client.setWorldRevealed(false);
-	loadStatusText = "";
+	if (loadStatusOwned) {
+		main.globalAllocator.free(loadStatusText);
+		loadStatusOwned = false;
+	}
+	loadStatusText = "Connecting...";
+	loadFraction = 0;
 	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	connectionManager = manager;
 	state = .init(.connecting);
@@ -128,9 +146,9 @@ fn finishConnect() void {
 // --- ASHFRAME CUSTOM CLIENT ---
 
 /// Fullscreen loading overlay drawn on top of everything while the world is
-/// not revealed: a dark backdrop, the centered status text (drawn by the
-/// window) and a progress bar. Called from the GUI pass so it survives even
-/// once the connecting window itself is a small modal.
+/// not revealed. Self-contained: it owns its status text and progress bar,
+/// so it stays correct even after the small connecting window closes. This
+/// is the ONE place the player should see during loading.
 pub fn renderOverlay() void {
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
@@ -139,28 +157,34 @@ pub fn renderOverlay() void {
 	const oldColor = draw.setColor(0xc0000000);
 	defer draw.restoreColor(oldColor);
 	draw.rect(.{0, 0}, screen);
-	// Progress bar near the bottom center.
+
+	const centerX = screen[0]/2;
+	// Status text, centered above the bar.
+	{
+		var statusLabelLocal = Label.init(.{centerX - 140, screen[1]*0.60}, 280, loadStatusText, .center);
+		defer statusLabelLocal.deinit();
+		statusLabelLocal.render(.{0, 0});
+	}
+	// Progress bar.
 	const barW = @min(screen[0]*0.5, 420);
 	const barH: f32 = 12;
 	const barX = (screen[0] - barW)/2;
-	const barY = screen[1]*0.72;
-	// Track.
+	const barY = screen[1]*0.68;
 	{
 		const trackColor = draw.setColor(0x40ffffff);
 		defer draw.restoreColor(trackColor);
 		draw.rect(.{barX, barY}, .{barW, barH});
 	}
-	// Fill.
 	const frac = @min(@max(loadFraction, 0), 1);
 	if (frac > 0) {
 		const fillColor = draw.setColor(0xff00d0a0);
 		defer draw.restoreColor(fillColor);
 		draw.rect(.{barX, barY}, .{barW*frac, barH});
 	}
-	// Percentage text centered just above the bar.
+	// Percentage text centered just below the bar.
 	var pctBuf: [16]u8 = undefined;
 	const pct = std.fmt.bufPrint(&pctBuf, "{d:.0}%", .{frac*100}) catch "0%";
-	var pctLabel = Label.init(.{screen[0]/2 - 24, barY - 22}, 64, pct, .center);
+	var pctLabel = Label.init(.{centerX - 32, barY + barH + 6}, 64, pct, .center);
 	defer pctLabel.deinit();
 	pctLabel.render(.{0, 0});
 }
@@ -202,7 +226,7 @@ pub fn update() void {
 				// first world frames can stall on serve work, and that
 				// stall must not consume the warmup cap.
 				warmT0 = 0;
-				if (statusLabel) |lbl| lbl.updateText("Loading lightmaps...");
+				setLoadStatus("Loading lightmaps...");
 				state.store(.warming, .release);
 			} else {
 				finishConnect();
@@ -210,44 +234,39 @@ pub fn update() void {
 			// --- ASHFRAME CUSTOM CLIENT ---
 		},
 		.warming => {
-			// --- ASHFRAME CUSTOM CLIENT: reveal when the prefetch is
-			// done AND the first serve pass ran plus a grace AND the
-			// near lightmap fragments are actually resident (measured,
-			// not guessed) — or the cap elapses. The cap is measured
-			// from the first evaluation so render stalls before it
-			// don't eat the budget. ---
+			// --- ASHFRAME CUSTOM CLIENT (clean join): the fullscreen overlay
+			// (renderOverlay) draws the status text + bar. We only compute the
+			// state here and reveal the world ONCE genuinely ready. If the
+			// safety cap elapses first, we keep waiting (never reveal a
+			// bare/mis-lit world) and just tell the player it's taking longer;
+			// the Cancel button stays available as the escape hatch. ---
 			const nowMs = main.timestamp().toMilliseconds();
 			if (warmT0 == 0) warmT0 = nowMs;
 			const pp = main.game.Player.getPosBlocking();
 			const cov = main.renderer.mesh_storage.nearLightCoverage(@as(i32, @intFromFloat(pp[0])), @as(i32, @intFromFloat(pp[1])));
 			const covered = cov.total == 0 or cov.resident*10 >= cov.total*9;
-			// Single source of truth for progress + stage (shared with the
-			// overlay's bar and the render gate).
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total);
 			loadFraction = status.fraction;
-			// Only rebuild the label text when the stage text changes.
-			const stageText: []const u8 = switch (status.stage) {
+			// Stage text, unless we're past the cap (then the "taking longer"
+			// hint stays up instead of being overwritten each frame).
+			const pastCap = nowMs -% warmT0 >= main.ashframe_client.warmCapMs;
+			var textBuf: [64]u8 = undefined;
+			const stageText: []const u8 = if (pastCap)
+				"Taking longer than usual..."
+			else switch (status.stage) {
 				.connecting => "Connecting...",
 				.assets => "Loading assets...",
-				.lightmaps => "Loading lightmaps...",
+				.lightmaps => if (cov.total != 0)
+					std.fmt.bufPrint(&textBuf, "Loading lightmaps... {d}/{d}", .{cov.resident, cov.total}) catch "Loading lightmaps..."
+				else
+					"Loading lightmaps...",
 				.time => "Syncing time...",
 				.ready => "Ready!",
 			};
-			if (status.stage == .lightmaps and cov.total != 0) {
-				var countBuf: [64]u8 = undefined;
-				const txt = std.fmt.bufPrint(&countBuf, "Loading lightmaps... {d}/{d}", .{cov.resident, cov.total}) catch "Loading lightmaps...";
-				if (!std.mem.eql(u8, txt, loadStatusText)) {
-					loadStatusText = main.globalAllocator.dupe(u8, txt);
-					if (statusLabel) |lbl| lbl.updateText(loadStatusText);
-				}
-			} else if (!std.mem.eql(u8, stageText, loadStatusText)) {
-				loadStatusText = main.globalAllocator.dupe(u8, stageText);
-				if (statusLabel) |lbl| lbl.updateText(loadStatusText);
+			if (!std.mem.eql(u8, stageText, loadStatusText)) {
+				setLoadStatus(stageText);
 			}
-			const lit = status.stage == .ready;
-			// Safety: if readiness never comes, reveal anyway after the cap
-			// (a broken server must not trap the player forever).
-			if (lit or nowMs -% warmT0 >= main.ashframe_client.warmCapMs) {
+			if (status.stage == .ready) {
 				finishConnect();
 			}
 			// --- ASHFRAME CUSTOM CLIENT ---

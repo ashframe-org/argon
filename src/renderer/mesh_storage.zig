@@ -642,7 +642,12 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	mutex.unlock();
 	// --- ASHFRAME CUSTOM CLIENT (perf) ---
 	main.ashframe_client.profBegin(.freeOld);
-	freeOldMeshes(olderPx, olderPy, olderPz, olderRD);
+	// Only walk the old render-distance volume when we actually moved to a
+	// new chunk cell or the distance changed. When stationary old==new, the
+	// walk frees nothing but cost ~19ms/frame over the whole volume. ---
+	if (olderPx != lastPx or olderPy != lastPy or olderPz != lastPz or olderRD != lastRD) {
+		freeOldMeshes(olderPx, olderPy, olderPz, olderRD);
+	}
 	main.ashframe_client.profEnd();
 	// --- ASHFRAME CUSTOM CLIENT ---
 

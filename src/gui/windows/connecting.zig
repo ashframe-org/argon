@@ -10,6 +10,8 @@ const GuiWindow = gui.GuiWindow;
 const Button = @import("../components/Button.zig");
 const Label = @import("../components/Label.zig");
 const VerticalList = @import("../components/VerticalList.zig");
+const graphics = main.graphics;
+const Texture = graphics.Texture;
 
 pub var window = GuiWindow{
 	.contentSize = Vec2f{128, 64},
@@ -31,12 +33,9 @@ var errorMessage: []const u8 = "";
 // --- ASHFRAME CUSTOM CLIENT: reveal gate (status label + warm deadline). ---
 var statusLabel: ?*Label = null;
 var warmT0: i64 = 0;
-/// Current overlay status text + progress fraction. Owned here (module-level)
-/// so the fullscreen overlay can draw them independently of the connecting
-/// window's lifetime.
-/// Owned copy of the current status text (allocated); `"Connecting..."` and
-/// the other literals are restored by assigning without freeing, so we track
-/// whether the current value is ours to free.
+/// Current overlay status text. Owned here (module-level) so the fullscreen
+/// overlay can draw it independently of the connecting window's lifetime.
+/// Owned copy: allocated via setLoadStatus; freed on the next change/reset.
 var loadStatusText: []const u8 = "Connecting...";
 var loadStatusOwned: bool = false;
 var loadFraction: f32 = 0;
@@ -45,6 +44,8 @@ var loadFraction: f32 = 0;
 /// even though we cannot measure progress during the main-thread freeze.
 var loadIndeterminate: bool = true;
 var barAnimT: f64 = 0;
+/// The Cubyz logo shown on the loading screen (loaded lazily).
+var logo: ?Texture = null;
 
 /// Set the overlay status text, freeing the previous owned copy.
 fn setLoadStatus(text: []const u8) void {
@@ -75,16 +76,22 @@ pub fn start(_ip: []const u8, manager: *ConnectionManager) void {
 	ip = main.globalAllocator.dupe(u8, _ip);
 	// --- ASHFRAME CUSTOM CLIENT ---
 	main.ashframe_client.noteDialAddress(_ip);
-	// --- ASHFRAME CUSTOM CLIENT (clean join): keep the backdrop up until
-	// the world is actually ready, so nothing jumps/flashes. ---
-	main.ashframe_client.setWorldRevealed(false);
+	// --- ASHFRAME CUSTOM CLIENT (clean join): the connecting dialog handles
+	// the handshake phase (as before). We only take over with the fullscreen
+	// overlay once the handshake is done, to avoid any window/overlay overlap
+	// flash. So worldRevealed stays true here. ---
 	if (loadStatusOwned) {
 		main.globalAllocator.free(loadStatusText);
 		loadStatusOwned = false;
 	}
 	loadStatusText = "Connecting...";
 	loadFraction = 0;
-	loadIndeterminate = true; // handshake/assets phase has no measurable % yet
+	loadIndeterminate = true; // handshake phase has no measurable % yet
+	// Persist the dial address now (while `ip` is valid): the dialog may be
+	// closed early when the fullscreen overlay takes over, freeing `ip`.
+	main.globalAllocator.free(settings.lastUsedIPAddress);
+	settings.lastUsedIPAddress = main.globalAllocator.dupe(u8, _ip);
+	settings.save();
 	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	connectionManager = manager;
 	state = .init(.connecting);
@@ -107,6 +114,11 @@ fn cancel() void {
 		state.store(.cancelled, .release);
 	}
 	// --- ASHFRAME CUSTOM CLIENT ---
+}
+
+/// Public so the overlay's own Cancel can call it.
+pub fn requestCancel() void {
+	cancel();
 }
 
 pub fn onOpen() void {
@@ -141,9 +153,7 @@ fn finishConnect() void {
 	main.ashframe_client.setWorldRevealed(true);
 	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	gui.closeWindowFromRef(&window);
-	main.globalAllocator.free(settings.lastUsedIPAddress);
-	settings.lastUsedIPAddress = main.globalAllocator.dupe(u8, ip);
-	settings.save();
+	// lastUsedIPAddress is saved in start() (ip may be freed by then).
 	for (gui.openWindows.items) |openWindow| {
 		gui.closeWindowFromRef(openWindow);
 	}
@@ -151,11 +161,18 @@ fn finishConnect() void {
 }
 // --- ASHFRAME CUSTOM CLIENT ---
 
-/// Fullscreen loading backdrop drawn in RAW screen space (called before the
-/// GUI scale is applied) so its pixel math is correct. It paints an opaque
-/// backdrop over the still-rendering world and a progress bar; the connecting
-/// window (status text + Cancel) renders on top. Reveal = this lifting once
-/// finishConnect sets worldRevealed.
+/// Hide the small connecting dialog once the fullscreen overlay takes over,
+/// so it cannot draw over the overlay. Other windows are left as-is: they sit
+/// behind the opaque overlay anyway, and `multiplayer_join` must survive so a
+/// cancel can return the player to it.
+fn hideConnectingDialog() void {
+	gui.closeWindowFromRef(&window);
+}
+
+/// Fullscreen loading screen drawn in RAW screen space (called before the GUI
+/// scale is applied) so its pixel math is correct. Opaque backdrop hides the
+/// still-rendering world; shows the Cubyz logo, a status + percentage line,
+/// and a progress bar. Reveal = this lifting once finishConnect runs.
 pub fn renderOverlay() void {
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
@@ -173,31 +190,41 @@ pub fn renderOverlay() void {
 		draw.restoreColor(c);
 	}
 
-	// Progress bar near the bottom. High contrast: light track + border +
-	// bright fill, so it reads clearly on the dark backdrop.
+	const centerX = screen[0]/2;
+
+	// Logo, centered ~24% down, preserving aspect (852x240).
+	if (logo == null) {
+		logo = Texture.initFromFile("assets/cubyz/ui/bigcubyz.png");
+	}
+	if (logo) |tex| {
+		const logoH: f32 = @min(screen[1]*0.18, 110);
+		const logoW = logoH*(852.0/240.0);
+		{
+			const c = draw.setColor(0xffffffff);
+			draw.image(tex, .{centerX - logoW/2, screen[1]*0.20}, .{logoW, logoH});
+			draw.restoreColor(c);
+		}
+	}
+
+	// Progress bar (high contrast: border + mid track + vivid fill).
 	const barW = @min(screen[0]*0.5, 420);
 	const barH: f32 = 16;
-	const barX = (screen[0] - barW)/2;
-	const barY = screen[1]*0.78;
+	const barX = centerX - barW/2;
+	const barY = screen[1]*0.66;
 	const border: f32 = 2;
-	// Outer border (light gray).
 	{
 		const c = draw.setColor(0xffc8d0dc);
 		draw.rect(.{barX - border, barY - border}, .{barW + 2*border, barH + 2*border});
 		draw.restoreColor(c);
 	}
-	// Track (solid mid gray).
 	{
 		const c = draw.setColor(0xff37404f);
 		draw.rect(.{barX, barY}, .{barW, barH});
 		draw.restoreColor(c);
 	}
-	// Fill: measurable fraction, or an animated indeterminate sweep.
 	{
 		const c = draw.setColor(0xff2ee6a6);
 		if (loadIndeterminate) {
-			// A ~30% wide band sweeping left->right, looping, clipped to the
-			// track. Compute the visible intersection [lo, hi] with [barX, barX+barW].
 			const bandW = barW*0.3;
 			const span = barW + bandW;
 			const t = @mod(barAnimT*0.06, 1.0);
@@ -211,12 +238,22 @@ pub fn renderOverlay() void {
 		}
 		draw.restoreColor(c);
 	}
-	// Percentage (or a "…" while indeterminate) centered below the bar.
-	var pctBuf: [16]u8 = undefined;
-	const pct: []const u8 = if (loadIndeterminate) "..." else std.fmt.bufPrint(&pctBuf, "{d:.0}%", .{@min(@max(loadFraction, 0), 1)*100}) catch "0%";
-	var pctLabel = Label.init(.{barX + barW/2 - 32, barY + barH + 8}, 64, pct, .center);
-	defer pctLabel.deinit();
-	pctLabel.render(.{0, 0});
+
+	// One line under the bar: "Status… 42%" (or the status alone while the
+	// fraction is indeterminate).
+	var lineBuf: [128]u8 = undefined;
+	const line: []const u8 = if (loadIndeterminate)
+		loadStatusText
+	else
+		std.fmt.bufPrint(&lineBuf, "{s} {d:.0}%", .{loadStatusText, @min(@max(loadFraction, 0), 1)*100}) catch loadStatusText;
+	var lineLabel = Label.init(.{centerX - 200, barY + barH + 10}, 400, line, .center);
+	defer lineLabel.deinit();
+	lineLabel.render(.{0, 0});
+
+	// Hint that Cancel is available (Esc / the dialog's button remains).
+	var hint = Label.init(.{centerX - 120, screen[1]*0.90}, 240, "Press Esc to cancel", .center);
+	defer hint.deinit();
+	hint.render(.{0, 0});
 }
 
 pub fn update() void {
@@ -255,12 +292,13 @@ pub fn update() void {
 				main.ashframe_client.kickPrefetch(@as(i32, @intFromFloat(pp[0])), @as(i32, @intFromFloat(pp[1])), @as(i32, @intFromFloat(pp[2])));
 			}
 			if (main.ashframe_client.isActive()) {
-				// Deadline anchors on first evaluation, not here: the
-				// first world frames can stall on serve work, and that
-				// stall must not consume the warmup cap.
+				// Handshake done -> now take over with the fullscreen overlay.
+				// Close every other window first so nothing flashes over it.
+				main.ashframe_client.setWorldRevealed(false);
+				hideConnectingDialog();
 				warmT0 = 0;
 				loadIndeterminate = false; // now measurable
-				setLoadStatus("Loading lightmaps...");
+				setLoadStatus("Loading chunks...");
 				state.store(.warming, .release);
 			} else {
 				finishConnect();
@@ -269,11 +307,9 @@ pub fn update() void {
 		},
 		.warming => {
 			// --- ASHFRAME CUSTOM CLIENT (clean join): the fullscreen overlay
-			// (renderOverlay) draws the status text + bar. We only compute the
-			// state here and reveal the world ONCE genuinely ready. If the
-			// safety cap elapses first, we keep waiting (never reveal a
-			// bare/mis-lit world) and just tell the player it's taking longer;
-			// the Cancel button stays available as the escape hatch. ---
+			// draws the status + bar. We compute the state and reveal the world
+			// ONCE genuinely ready; if the safety cap elapses first we keep
+			// waiting (never reveal a bare/mis-lit world) and just say so. ---
 			const nowMs = main.timestamp().toMilliseconds();
 			if (warmT0 == 0) warmT0 = nowMs;
 			const pp = main.game.Player.getPosBlocking();
@@ -281,25 +317,17 @@ pub fn update() void {
 			const py: i32 = @intFromFloat(pp[1]);
 			const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
 			const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
-			// Both lightmaps AND chunk meshes must be resident near spawn,
-			// or the world reveals with visible holes.
 			const covered = (cov.total == 0 or cov.resident*10 >= cov.total*9) and
 				(meshCov.total == 0 or meshCov.resident*10 >= meshCov.total*9);
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total, meshCov.resident, meshCov.total);
 			loadFraction = status.fraction;
-			// Stage text, unless we're past the cap (then the "taking longer"
-			// hint stays up instead of being overwritten each frame).
 			const pastCap = nowMs -% warmT0 >= main.ashframe_client.warmCapMs;
-			var textBuf: [64]u8 = undefined;
 			const stageText: []const u8 = if (pastCap)
 				"Taking longer than usual..."
 			else switch (status.stage) {
-				.connecting => "Connecting...",
+				.connecting => "Waiting for handshake...",
 				.assets => "Loading assets...",
-				.lightmaps => if (cov.total != 0)
-					std.fmt.bufPrint(&textBuf, "Loading lightmaps... {d}/{d}", .{cov.resident, cov.total}) catch "Loading lightmaps..."
-				else
-					"Loading lightmaps...",
+				.lightmaps => "Loading chunks...",
 				.time => "Syncing time...",
 				.ready => "Ready!",
 			};

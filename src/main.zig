@@ -96,6 +96,13 @@ pub const std_options: std.Options = .{ // MARK: std_options
 // MARK: Callbacks
 fn escape(mods: Window.Key.Modifiers) void {
 	if (gui.selectedTextInput != null) gui.setSelectedTextInput(null);
+	// --- ASHFRAME CUSTOM CLIENT (clean join): while the fullscreen loading
+	// overlay is up, Esc cancels the join instead of opening the inventory.
+	if (!ashframe_client.isWorldRevealed() and game.world != null) {
+		gui.windowlist.connecting.requestCancel();
+		return;
+	}
+	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	inventory(mods);
 }
 fn inventory(_: Window.Key.Modifiers) void {

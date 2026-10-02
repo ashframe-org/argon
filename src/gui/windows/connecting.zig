@@ -145,48 +145,41 @@ fn finishConnect() void {
 }
 // --- ASHFRAME CUSTOM CLIENT ---
 
-/// Fullscreen loading overlay drawn on top of everything while the world is
-/// not revealed. Self-contained: it owns its status text and progress bar,
-/// so it stays correct even after the small connecting window closes. This
-/// is the ONE place the player should see during loading.
+/// Fullscreen loading backdrop drawn in RAW screen space (called before the
+/// GUI scale is applied) so its pixel math is correct. It paints an opaque
+/// backdrop over the still-rendering world and a progress bar; the connecting
+/// window (status text + Cancel) renders on top. Reveal = this lifting once
+/// finishConnect sets worldRevealed.
 pub fn renderOverlay() void {
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
 	const draw = main.graphics.draw;
-	// Fully opaque backdrop: the world keeps rendering behind this (so
-	// chunks/lightmaps load), but the player must not see the not-yet-ready
-	// world. Reveal = this overlay lifting in finishConnect.
+	// Opaque backdrop: hides the not-yet-ready world behind it. The world
+	// keeps rendering underneath so chunks/lightmaps continue to load.
 	const oldColor = draw.setColor(0xff10141a);
 	defer draw.restoreColor(oldColor);
 	draw.rect(.{0, 0}, screen);
 
-	const centerX = screen[0]/2;
-	// Status text, centered above the bar.
-	{
-		var statusLabelLocal = Label.init(.{centerX - 140, screen[1]*0.60}, 280, loadStatusText, .center);
-		defer statusLabelLocal.deinit();
-		statusLabelLocal.render(.{0, 0});
-	}
-	// Progress bar.
+	// Progress bar near the bottom, leaving the center for the dialog.
 	const barW = @min(screen[0]*0.5, 420);
 	const barH: f32 = 12;
 	const barX = (screen[0] - barW)/2;
-	const barY = screen[1]*0.68;
+	const barY = screen[1]*0.78;
 	{
-		const trackColor = draw.setColor(0x40ffffff);
-		defer draw.restoreColor(trackColor);
+		const track = draw.setColor(0x40ffffff);
+		defer draw.restoreColor(track);
 		draw.rect(.{barX, barY}, .{barW, barH});
 	}
 	const frac = @min(@max(loadFraction, 0), 1);
 	if (frac > 0) {
-		const fillColor = draw.setColor(0xff00d0a0);
-		defer draw.restoreColor(fillColor);
+		const fill = draw.setColor(0xff00d0a0);
+		defer draw.restoreColor(fill);
 		draw.rect(.{barX, barY}, .{barW*frac, barH});
 	}
-	// Percentage text centered just below the bar.
+	// Percentage centered just below the bar.
 	var pctBuf: [16]u8 = undefined;
 	const pct = std.fmt.bufPrint(&pctBuf, "{d:.0}%", .{frac*100}) catch "0%";
-	var pctLabel = Label.init(.{centerX - 32, barY + barH + 6}, 64, pct, .center);
+	var pctLabel = Label.init(.{barX + barW/2 - 32, barY + barH + 6}, 64, pct, .center);
 	defer pctLabel.deinit();
 	pctLabel.render(.{0, 0});
 }

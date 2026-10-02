@@ -623,6 +623,12 @@ pub fn updateAndRenderGui() void {
 				draw.customShadedRectOpenGl(GuiWindow.borderUniforms, .{0, 0}, main.Window.getWindowSize());
 			}
 		}
+		// --- ASHFRAME CUSTOM CLIENT (clean join): fullscreen loading
+		// backdrop + progress bar, drawn in RAW screen space (before the GUI
+		// scale is applied) so pixel-based positions are correct. The
+		// connecting window (status text + Cancel) renders on top below.
+		windowlist.connecting.renderOverlay();
+		// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 		const oldScale = draw.setScale(scale);
 		defer draw.restoreScale(oldScale);
 		for (openWindows.items) |window| {
@@ -634,10 +640,6 @@ pub fn updateAndRenderGui() void {
 			window.render(mousePos);
 		}
 		inventory.render(mousePos);
-		// --- ASHFRAME CUSTOM CLIENT (clean join): fullscreen loading
-		// overlay with progress, held until the world is revealed. ---
-		windowlist.connecting.renderOverlay();
-		// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	}
 	const oldScale = draw.setScale(scale);
 	defer draw.restoreScale(oldScale);

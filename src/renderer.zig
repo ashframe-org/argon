@@ -33,6 +33,12 @@ pub const mesh_storage = @import("renderer/mesh_storage.zig");
 
 /// Time after which no more chunk meshes are created. This allows the game to run smoother on movement.
 const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
+// --- ASHFRAME CUSTOM CLIENT (loading speed): while the world is hidden behind
+// the clean-join overlay, spend much more of the frame building/uploading the
+// near-field meshes, so the reveal gate is satisfied sooner. Slow pre-reveal
+// frames are invisible (opaque overlay), and it reverts to `maximumMeshTime`
+// the moment the world is revealed.
+const maximumMeshTimeLoading: std.Io.Duration = .fromMilliseconds(60);
 pub const zNear = 0.1;
 pub const zFar = 65536.0; // TODO: Fix z-fighting problems.
 
@@ -175,7 +181,11 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	const startTime = main.timestamp();
 	// --- ASHFRAME CUSTOM CLIENT ---
 	main.ashframe_client.profBegin(.updateMeshes);
-	mesh_storage.updateMeshes(startTime.addDuration(maximumMeshTime));
+	// --- ASHFRAME CUSTOM CLIENT (loading speed): bigger mesh budget while the
+	// world is still hidden (join warmup), normal budget once revealed. ---
+	const meshBudget: std.Io.Duration = if (main.ashframe_client.isWorldRevealed()) maximumMeshTime else maximumMeshTimeLoading;
+	mesh_storage.updateMeshes(startTime.addDuration(meshBudget));
+	// --- ASHFRAME CUSTOM CLIENT ---
 	main.ashframe_client.profEnd();
 	// End the frame timer and emit/reset the ~1s summary.
 	main.ashframe_client.profFrameEndStart();

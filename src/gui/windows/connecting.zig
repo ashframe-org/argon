@@ -149,6 +149,20 @@ pub fn onClose() void {
 
 // --- ASHFRAME CUSTOM CLIENT: shared reveal path (warmed or timed out). ---
 fn finishConnect() void {
+	// --- ASHFRAME CUSTOM CLIENT (loading speed): one-shot join timing so the
+	// reason for a slow reveal is visible (fps-bound vs coverage-bound). ---
+	if (settings.launchConfig.ashframeDebug and warmT0 != 0) {
+		const nowMs = main.timestamp().toMilliseconds();
+		const pp = main.game.Player.getEyePosBlocking();
+		const px: i32 = @intFromFloat(pp[0]);
+		const py: i32 = @intFromFloat(pp[1]);
+		const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
+		const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
+		std.log.info("[ashframe] join reveal: warmup {d}ms | mesh {d}/{d} light {d}/{d}", .{
+			nowMs -% warmT0, meshCov.resident, meshCov.total, cov.resident, cov.total,
+		});
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 	// --- ASHFRAME CUSTOM CLIENT (clean join): reveal the world only now,
 	// once the load gate has passed. ---
 	main.ashframe_client.setWorldRevealed(true);

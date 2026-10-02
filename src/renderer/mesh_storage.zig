@@ -936,7 +936,7 @@ fn relightMeshesForFragment(fx: i32, fy: i32, vs: u31) void {
 		while (y < fy + span) : (y += cs) {
 			var z = lastPz - zExt;
 			while (z <= lastPz + zExt) : (z += cs) {
-				const pos = chunk.ChunkPosition{ .wx = x, .wy = y, .wz = z, .voxelSize = vs };
+				const pos = chunk.ChunkPosition{.wx = x, .wy = y, .wz = z, .voxelSize = vs};
 				if (getMesh(pos) != null) {
 					ChunkMesh.scheduleLightRefresh(pos);
 				}
@@ -950,6 +950,37 @@ fn relightMeshesForFragment(fx: i32, fy: i32, vs: u31) void {
 // connect prefetch warms) across all LODs vs how many are resident in
 // map storage. Render/main thread only; atomic loads, no locks. ---
 pub const NearCoverage = struct { total: u32, resident: u32 };
+
+// --- ASHFRAME CUSTOM CLIENT (clean join): near-field mesh coverage for the
+// reveal gate. Mirrors nearLightCoverage but counts chunk-mesh nodes that
+// finished meshing in the +-192 block box, so the world is not revealed with
+// visible holes. Render/main thread only; atomic-free node reads. ---
+pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
+	var total: u32 = 0;
+	var resident: u32 = 0;
+	const half: i32 = 192;
+	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
+		const lod: u5 = @intCast(_lod);
+		const vs: u31 = @as(u31, 1) << lod;
+		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
+		var cx = (px - half) & ~(sz - 1);
+		const maxCx = (px + half) & ~(sz - 1);
+		while (cx <= maxCx) : (cx += sz) {
+			var cy = (py - half) & ~(sz - 1);
+			const maxCy = (py + half) & ~(sz - 1);
+			while (cy <= maxCy) : (cy += sz) {
+				// Vertical: the column of chunk(s) around the player's height.
+				const cz = pz & ~(sz - 1);
+				total += 1;
+				const node = getNodePointer(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
+				if (node.mesh.load(.acquire)) |mesh| {
+					if (mesh.finishedMeshing) resident += 1;
+				}
+			}
+		}
+	}
+	return .{.total = total, .resident = resident};
+}
 
 pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 	var total: u32 = 0;
@@ -970,7 +1001,7 @@ pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 			}
 		}
 	}
-	return .{ .total = total, .resident = resident };
+	return .{.total = total, .resident = resident};
 }
 
 // --- ASHFRAME CUSTOM CLIENT: defer mesh creation until the lightmap

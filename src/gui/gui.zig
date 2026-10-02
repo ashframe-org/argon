@@ -624,15 +624,18 @@ pub fn updateAndRenderGui() void {
 			}
 		}
 		// --- ASHFRAME CUSTOM CLIENT (clean join): fullscreen loading
-		// backdrop + progress bar, drawn in RAW screen space (before the GUI
-		// scale is applied) so pixel-based positions are correct. The
-		// connecting window (status text + Cancel) renders on top below.
+		// backdrop + bar, in RAW screen space (before GUI scale) so its
+		// pixel math is correct. Still-rendering world is hidden behind it.
 		windowlist.connecting.renderOverlay();
 		// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 		const oldScale = draw.setScale(scale);
 		defer draw.restoreScale(oldScale);
+		// While the clean-join loading overlay is up, skip the modal dim:
+		// the overlay is opaque and covers the whole screen anyway, and the
+		// dim halves the brightness of everything (including the overlay).
+		const loadingOverlay = !main.ashframe_client.isWorldRevealed();
 		for (openWindows.items) |window| {
-			if (modalWindow == window) {
+			if (modalWindow == window and !loadingOverlay) {
 				const modalOldColor = draw.setColor(0x80000000);
 				defer draw.restoreColor(modalOldColor);
 				draw.rect(.{0, 0}, main.Window.getWindowSize());

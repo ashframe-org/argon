@@ -1393,7 +1393,8 @@ pub fn loadStatus(nowMs: i64, covered: bool, covResident: usize, covTotal: usize
 	// Assets: unpack/load is blocking on the main thread, so by the time we
 	// are here it is complete.
 	frac += StageProgress.assets;
-	// Lightmaps: near-fragment coverage (0/0 counts as done).
+	// World readiness: lightmaps + meshes both feed the bar so it does not
+	// appear stuck while meshes finish (covered already reflects both).
 	const covFrac: f32 = if (covTotal == 0) 1.0 else @min(1.0, @as(f32, @floatFromInt(covResident))/@as(f32, @floatFromInt(covTotal)));
 	const warmFrac: f32 = if (isWarmupDone()) 1.0 else 0.35;
 	const lm = @max(warmFrac, covFrac);

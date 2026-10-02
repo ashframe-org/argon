@@ -238,8 +238,14 @@ pub fn update() void {
 			const nowMs = main.timestamp().toMilliseconds();
 			if (warmT0 == 0) warmT0 = nowMs;
 			const pp = main.game.Player.getPosBlocking();
-			const cov = main.renderer.mesh_storage.nearLightCoverage(@as(i32, @intFromFloat(pp[0])), @as(i32, @intFromFloat(pp[1])));
-			const covered = cov.total == 0 or cov.resident*10 >= cov.total*9;
+			const px: i32 = @intFromFloat(pp[0]);
+			const py: i32 = @intFromFloat(pp[1]);
+			const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
+			const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
+			// Both lightmaps AND chunk meshes must be resident near spawn,
+			// or the world reveals with visible holes.
+			const covered = (cov.total == 0 or cov.resident*10 >= cov.total*9) and
+				(meshCov.total == 0 or meshCov.resident*10 >= meshCov.total*9);
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total);
 			loadFraction = status.fraction;
 			// Stage text, unless we're past the cap (then the "taking longer"

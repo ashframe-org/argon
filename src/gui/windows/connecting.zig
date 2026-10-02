@@ -160,11 +160,18 @@ pub fn renderOverlay() void {
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
 	const draw = main.graphics.draw;
-	// Opaque backdrop: hides the not-yet-ready world behind it. The world
-	// keeps rendering underneath so chunks/lightmaps continue to load.
-	const oldColor = draw.setColor(0xff10141a);
-	defer draw.restoreColor(oldColor);
-	draw.rect(.{0, 0}, screen);
+	// IMPORTANT: draw.setColor MULTIPLIES the current color, so every
+	// element must be set from a known base. Force the base to plain white
+	// first; otherwise the dark backdrop multiplies into every following
+	// color (bar, fill, text) and everything renders near-black.
+	const baseColor = draw.setColor(0xffffffff);
+	defer draw.restoreColor(baseColor);
+	// Opaque backdrop (hides the still-rendering, not-yet-ready world).
+	{
+		const c = draw.setColor(0xff10141a);
+		draw.rect(.{0, 0}, screen);
+		draw.restoreColor(c);
+	}
 
 	// Progress bar near the bottom. High contrast: light track + border +
 	// bright fill, so it reads clearly on the dark backdrop.
@@ -175,20 +182,19 @@ pub fn renderOverlay() void {
 	const border: f32 = 2;
 	// Outer border (light gray).
 	{
-		const c0 = draw.setColor(0xffc8d0dc);
-		defer draw.restoreColor(c0);
+		const c = draw.setColor(0xffc8d0dc);
 		draw.rect(.{barX - border, barY - border}, .{barW + 2*border, barH + 2*border});
+		draw.restoreColor(c);
 	}
-	// Track (solid mid gray - visible, unlike the old 25%-alpha white).
+	// Track (solid mid gray).
 	{
-		const c0 = draw.setColor(0xff37404f);
-		defer draw.restoreColor(c0);
+		const c = draw.setColor(0xff37404f);
 		draw.rect(.{barX, barY}, .{barW, barH});
+		draw.restoreColor(c);
 	}
 	// Fill: measurable fraction, or an animated indeterminate sweep.
 	{
-		const c0 = draw.setColor(0xff2ee6a6);
-		defer draw.restoreColor(c0);
+		const c = draw.setColor(0xff2ee6a6);
 		if (loadIndeterminate) {
 			// A ~30% wide band sweeping left->right, looping, clipped to the
 			// track. Compute the visible intersection [lo, hi] with [barX, barX+barW].
@@ -203,6 +209,7 @@ pub fn renderOverlay() void {
 			const frac = @min(@max(loadFraction, 0), 1);
 			if (frac > 0) draw.rect(.{barX, barY}, .{barW*frac, barH});
 		}
+		draw.restoreColor(c);
 	}
 	// Percentage (or a "…" while indeterminate) centered below the bar.
 	var pctBuf: [16]u8 = undefined;

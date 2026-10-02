@@ -1544,10 +1544,24 @@ pub fn loadStatus(nowMs: i64, covered: bool, covResident: usize, covTotal: usize
 	// Time: all-or-nothing (a single packet).
 	const clockOk = isTimeSynced();
 	frac += StageProgress.time*(if (clockOk) @as(f32, 1.0) else 0.0);
-	const ready = isWarmupDone() and firstServeReady(nowMs) and covered and clockOk;
-	const stage: LoadStage = if (ready) .ready else if (!clockOk) .time else .lightmaps;
+	// A bounded safety cap so the gate can never stall forever if coverage
+	// (or the clock) never lands - e.g. an odd LOD/RD combination. Once the
+	// cap elapses we reveal regardless: a possibly thin first frame beats an
+	// unusable stuck screen.
+	const timedOut = warmT0Ms != 0 and nowMs -% warmT0Ms >= worldRevealCapMs;
+	const ready = clockOk and (timedOut or (isWarmupDone() and firstServeReady(nowMs) and covered));
+	const stage: LoadStage = if (ready) .ready else if (!clockOk and !timedOut) .time else .lightmaps;
 	return .{.fraction = if (ready) 1.0 else @min(frac, 0.99), .stage = stage};
 }
+
+/// Start of the current warming phase (0 = not warming). Set by the
+/// connecting window when it enters `.warming`. Drives the reveal safety cap.
+pub var warmT0Ms: i64 = 0;
+pub fn noteWarmingStart(nowMs: i64) void {
+	warmT0Ms = nowMs;
+}
+/// Hard ceiling on the warming phase before the world is revealed anyway.
+pub const worldRevealCapMs: i64 = 8000;
 // --- ASHFRAME CUSTOM CLIENT (clean join) ---
 var prefetchKicked: std.atomic.Value(bool) = .init(false);
 var prefetchDoneFlag: std.atomic.Value(bool) = .init(true);
@@ -1613,13 +1627,17 @@ const PrefetchTask = struct {
 		var chunks: u32 = 0;
 		var frags: u32 = 0;
 		const t0 = main.timestamp().toMilliseconds();
-		// Near chunks: +-192 blocks each axis, every LOD. Coarse LODs
-		// (vs>=8, what the far field actually renders) get +-768: only
-		// ~250 extra positions, warms far geometry nearly free.
+		// Near chunks: scale the warm radius with the render distance so a low
+		// RD does not pay for a huge far volume it will never draw. Always warm
+		// at least ±192 (the near-field box the reveal gate measures); coarse
+		// LODs (vs>=8, the far field) get the larger of ±768 or the RD extent.
+		const rdBlocks: i32 = @as(i32, @intCast(main.settings.renderDistance))*32;
+		const nearHalf: i32 = @max(192, @min(768, rdBlocks));
+		const farHalf: i32 = @max(768, rdBlocks);
 		for (0..@as(usize, main.settings.highestLod) + 1) |_lod| {
 			const lod: u5 = @intCast(_lod);
 			const vs: u31 = @as(u31, 1) << lod;
-			const half: i32 = if (vs >= 8) 768 else 192;
+			const half: i32 = if (vs >= 8) farHalf else nearHalf;
 			const cs: i32 = 32*@as(i32, @intCast(vs));
 			var x = (self.px - half) & ~(cs - 1);
 			const maxX = (self.px + half) & ~(cs - 1);

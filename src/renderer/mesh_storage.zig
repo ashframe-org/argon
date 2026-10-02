@@ -64,6 +64,18 @@ var lastPz: i32 = 0;
 var lastRD: u16 = 0;
 var mutex: main.utils.Mutex = .{};
 
+// --- ASHFRAME CUSTOM CLIENT (clean join): near-field re-request while the
+// reveal gate is active. The client never retries requests on its own, so a
+// request that is deferred/lost by the server (or skipped on the first frame)
+// leaves a permanent hole until the player crosses a chunk boundary. At a low
+// render distance the near-field set is tiny, so one missing cell can keep the
+// coverage gate below its threshold. While the world is still hidden we scan
+// the same near-field box the gate measures and re-issue requests for the
+// still-missing positions, throttled so this never floods. ---
+var nearRerequestLastMs: i64 = 0;
+const nearRerequestIntervalMs: i64 = 1000;
+const nearRerequestHalf: i32 = 192;
+
 // --- ASHFRAME CUSTOM CLIENT (perf: cache the visible-node traversal) ---
 // updateAndGetRenderChunks re-ran the whole hierarchical BFS + per-node
 // neighbor-LOD recompute every frame (~250ms BFS + ~140ms nbrLod at RD12 on
@@ -683,6 +695,15 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	// --- ASHFRAME CUSTOM CLIENT ---
 	main.ashframe_client.endServeBatch();
 	main.ashframe_client.profEnd();
+	// --- ASHFRAME CUSTOM CLIENT: while the clean-join gate is active,
+	// re-request near-field positions that never arrived (bounded, ~1/s). ---
+	{
+		main.ashframe_client.profBegin(.serveBatch);
+		main.ashframe_client.beginServeBatch();
+		rerequestMissingNearField(&meshRequests, &mapRequests);
+		main.ashframe_client.endServeBatch();
+		main.ashframe_client.profEnd();
+	}
 	// --- ASHFRAME CUSTOM CLIENT (perf) ---
 
 	// Make requests as soon as possible to reduce latency:
@@ -1090,32 +1111,57 @@ fn relightMeshesForFragment(fx: i32, fy: i32, vs: u31) void {
 	}
 }
 
-// --- ASHFRAME CUSTOM CLIENT: near-field lightmap coverage for the
-// reveal gate. Counts fragments in the +-192 block box (same box the
-// connect prefetch warms) across all LODs vs how many are resident in
-// map storage. Render/main thread only; atomic loads, no locks. ---
+// --- ASHFRAME CUSTOM CLIENT (clean join): near-field coverage for the
+// reveal gate. The gate used to count a FIXED +-192 block box across all
+// LODs regardless of the render distance. At a low render distance the
+// coarse LODs in that box are outside the render volume and are never
+// requested/meshed, so `resident/total` could never reach the threshold and
+// the screen stalled at "Taking longer than usual" (RD5). Coverage now
+// counts only positions that actually intersect the render volume for their
+// LOD at the current render distance. Render/main thread only; no locks. ---
 pub const NearCoverage = struct { total: u32, resident: u32 };
 
-// --- ASHFRAME CUSTOM CLIENT (clean join): near-field mesh coverage for the
-// reveal gate. Mirrors nearLightCoverage but counts chunk-mesh nodes that
-// finished meshing in the +-192 block box, so the world is not revealed with
-// visible holes. Render/main thread only; atomic-free node reads. ---
+/// Render distance in blocks for the current frame (falls back to the
+/// setting before the first render pass has set `lastRD`).
+fn coverageRenderDistanceBlocks() i32 {
+	const rd: u16 = if (lastRD != 0) lastRD else settings.renderDistance;
+	return @as(i32, @intCast(rd))*chunk.chunkSize;
+}
+
+/// True when the axis-aligned box `[minX,maxX) x [minY,maxY)` (block units,
+/// half-open) lies within `rd` blocks of the player on the X/Y plane (with
+/// +1 block of slack). The reveal gate only cares that the near field around
+/// the player is populated, so a per-axis plane test is enough and matches
+/// the horizontal chunk/fragment grid the box already walks.
+fn boxInRenderVolume(px: i32, py: i32, rd: i32, minX: i64, minY: i64, maxX: i64, maxY: i64) bool {
+	const nx = @min(@max(@as(i64, px), minX), maxX);
+	const ny = @min(@max(@as(i64, py), minY), maxY);
+	const ddx = nx - px;
+	const ddy = ny - py;
+	const r = @as(i64, rd) + 1;
+	return ddx*ddx + ddy*ddy <= r*r;
+}
+
 pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
 	var total: u32 = 0;
 	var resident: u32 = 0;
-	const half: i32 = 192;
+	const rd: i32 = coverageRenderDistanceBlocks();
 	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const vs: u31 = @as(u31, 1) << lod;
 		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
-		var cx = (px - half) & ~(sz - 1);
-		const maxCx = (px + half) & ~(sz - 1);
+		// Per-LOD reach: coarse chunks cover a whole cell, so walk at least
+		// one cell beyond the raw render distance in every direction.
+		const reach: i32 = (@divTrunc(rd, sz) + 1)*sz;
+		var cx = (px - reach) & ~(sz - 1);
+		const maxCx = (px + reach) & ~(sz - 1);
 		while (cx <= maxCx) : (cx += sz) {
-			var cy = (py - half) & ~(sz - 1);
-			const maxCy = (py + half) & ~(sz - 1);
+			var cy = (py - reach) & ~(sz - 1);
+			const maxCy = (py + reach) & ~(sz - 1);
 			while (cy <= maxCy) : (cy += sz) {
 				// Vertical: the column of chunk(s) around the player's height.
 				const cz = pz & ~(sz - 1);
+				if (!boxInRenderVolume(px, py, rd, cx, cy, @as(i64, cx) + sz, @as(i64, cy) + sz)) continue;
 				total += 1;
 				const node = getNodePointer(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
 				if (node.mesh.load(.acquire)) |mesh| {
@@ -1130,10 +1176,68 @@ pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
 pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 	var total: u32 = 0;
 	var resident: u32 = 0;
-	const half: i32 = 192;
+	const rd: i32 = coverageRenderDistanceBlocks();
 	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const vs: u31 = @as(u31, 1) << lod;
+		const frag: i32 = @as(i32, LightMap.LightMapFragment.mapSize)*@as(i32, @intCast(vs));
+		const reach: i32 = (@divTrunc(rd, frag) + 1)*frag;
+		var fx = (px - reach) & ~(frag - 1);
+		const maxFx = (px + reach) & ~(frag - 1);
+		while (fx <= maxFx) : (fx += frag) {
+			var fy = (py - reach) & ~(frag - 1);
+			const maxFy = (py + reach) & ~(frag - 1);
+			while (fy <= maxFy) : (fy += frag) {
+				if (!boxInRenderVolume(px, py, rd, fx, fy, @as(i64, fx) + frag, @as(i64, fy) + frag)) continue;
+				total += 1;
+				if (getLightMapPiece(fx, fy, vs) != null) resident += 1;
+			}
+		}
+	}
+	return .{.total = total, .resident = resident};
+}
+
+/// While the world is still hidden by the clean-join reveal gate, re-issue
+/// requests for near-field chunks/lightmaps that have not arrived. Bounded to
+/// once per `nearRerequestIntervalMs` and to the fixed near-field box the
+/// prefetch warms, so it only covers the area the gate actually measures.
+/// Render/main thread only.
+fn rerequestMissingNearField(meshRequests: *main.ListManaged(chunk.ChunkPosition), mapRequests: *main.ListManaged(LightMap.MapFragmentPosition)) void {
+	if (main.ashframe_client.isWorldRevealed()) return;
+	const nowMs = main.timestamp().toMilliseconds();
+	if (nowMs -% nearRerequestLastMs < nearRerequestIntervalMs) return;
+	nearRerequestLastMs = nowMs;
+	const px = lastPx;
+	const py = lastPy;
+	const pz = lastPz;
+	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
+		const lod: u5 = @intCast(_lod);
+		const vs: u31 = @as(u31, 1) << lod;
+		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
+		const half: i32 = if (vs >= 8) 768 else nearRerequestHalf;
+		var cx = (px - half) & ~(sz - 1);
+		const maxCx = (px + half) & ~(sz - 1);
+		while (cx <= maxCx) : (cx += sz) {
+			var cy = (py - half) & ~(sz - 1);
+			const maxCy = (py + half) & ~(sz - 1);
+			while (cy <= maxCy) : (cy += sz) {
+				const cz = pz & ~(sz - 1);
+				const node = getNodePointer(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
+				const has = if (node.mesh.load(.acquire)) |m| m.finishedMeshing else false;
+				// Only ask for positions that are genuinely wanted (in render
+				// distance) and not already served from the disk cache.
+				const pos = chunk.ChunkPosition{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs};
+				if (!has and isInRenderDistance(pos)) {
+					if (main.ashframe_client.loadChunk(pos)) |cached| {
+						const task = main.globalAllocator.create(network.protocols.chunkTransmission.MeshGenerationTask);
+						task.* = .{.pos = pos, .data = cached};
+						main.threadPool.addTask(task, &network.protocols.chunkTransmission.MeshGenerationTask.vtable);
+					} else {
+						meshRequests.append(pos);
+					}
+				}
+			}
+		}
 		const frag: i32 = @as(i32, LightMap.LightMapFragment.mapSize)*@as(i32, @intCast(vs));
 		var fx = (px - half) & ~(frag - 1);
 		const maxFx = (px + half) & ~(frag - 1);
@@ -1141,12 +1245,19 @@ pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 			var fy = (py - half) & ~(frag - 1);
 			const maxFy = (py + half) & ~(frag - 1);
 			while (fy <= maxFy) : (fy += frag) {
-				total += 1;
-				if (getLightMapPiece(fx, fy, vs) != null) resident += 1;
+				if (getLightMapPiece(fx, fy, vs) != null) continue;
+				const pos = LightMap.MapFragmentPosition{.wx = fx, .wy = fy, .voxelSize = vs, .voxelSizeShift = lod};
+				if (!isMapInRenderDistance(pos)) continue;
+				if (main.ashframe_client.loadLightMap(fx, fy, vs)) |cached| {
+					const task = main.globalAllocator.create(network.protocols.lightMapTransmission.LightMapTask);
+					task.* = .{.wx = fx, .wy = fy, .voxelSizeShift = lod, .data = cached};
+					main.threadPool.addTask(task, &network.protocols.lightMapTransmission.LightMapTask.vtable);
+				} else {
+					mapRequests.append(pos);
+				}
 			}
 		}
 	}
-	return .{.total = total, .resident = resident};
 }
 
 // --- ASHFRAME CUSTOM CLIENT: defer mesh creation until the lightmap

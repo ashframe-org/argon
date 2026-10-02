@@ -483,6 +483,14 @@ pub const chunkTransmission = struct { // MARK: chunkTransmission
 						main.globalAllocator.destroy(self);
 						return;
 					}
+					// --- ASHFRAME CUSTOM CLIENT (black-shadow fix): the defer
+					// list is full, so we cannot hold this blob. Drop it instead
+					// of building a permanently-black mesh; the chunk is
+					// re-requested on movement once the list drains. ---
+					main.globalAllocator.free(self.data);
+					main.globalAllocator.destroy(self);
+					return;
+					// --- ASHFRAME CUSTOM CLIENT ---
 				}
 			}
 			// --- ASHFRAME CUSTOM CLIENT ---

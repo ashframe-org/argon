@@ -572,15 +572,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		}
 		self.mutex.unlock();
 		self.lightingData[0].propagateLights(lightEmittingBlocks.items, true, lightRefreshList);
-		self.initSunLight(lightRefreshList);
-	}
-
-	/// Propagates the sun channel from the lightmap fragment. Split out of
-	/// `initLight` so a mesh that was built before its fragment arrived can be
-	/// re-lit once it lands: the sun channel is otherwise set exactly once, at
-	/// mesh birth, and a missing fragment leaves it zero (black terrain) with no
-	/// way to recover. `refreshSunLight` clears the channel first.
-	fn initSunLight(self: *ChunkMesh, lightRefreshList: *main.ListManaged(chunk.ChunkPosition)) void {
 		sunLight: {
 			var allSun: bool = self.chunk.data.palette().len == 1 and self.chunk.data.palette()[0].load(.unordered).typ == 0;
 			var sunStarters: [chunk.chunkSize*chunk.chunkSize]chunk.BlockPos = undefined;
@@ -607,16 +598,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				self.lightingData[1].propagateLights(sunStarters[0..index], true, lightRefreshList);
 			}
 		}
-	}
-
-	/// Recomputes the sun channel now that this mesh's lightmap fragment has
-	/// arrived, then repacks. Must be called WITHOUT `self.mutex` held (the
-	/// channel helpers take their own locks and may lock neighbour channels;
-	/// mirrors how `generateLightingData` calls `initLight` unlocked). The
-	/// caller repacks under the lock afterwards.
-	pub fn relightSunFromFragment(self: *ChunkMesh, lightRefreshList: *main.ListManaged(chunk.ChunkPosition)) void {
-		self.lightingData[1].clear();
-		self.initSunLight(lightRefreshList);
 	}
 
 	pub fn generateLightingData(self: *ChunkMesh) error{ AlreadyStored, NoLongerNeeded }!void {
@@ -1394,26 +1375,10 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 			defer main.globalAllocator.destroy(self);
 			const mesh = mesh_storage.getMesh(self.pos) orelse return;
 			if (mesh.needsLightRefresh.swap(false, .acq_rel)) {
-				// --- ASHFRAME CUSTOM CLIENT (black-shadow fix): re-run the sun
-				// channel, not just re-pack. A mesh force-built before its
-				// lightmap fragment landed has a zero sun channel; `finishData`
-				// alone re-reads that zero data, so the mesh stayed black
-				// forever. `relightSunFromFragment` clears + re-propagates sun
-				// from the now-resident fragment. Called OUTSIDE `mesh.mutex`
-				// (the channel helpers take their own locks); then repack under
-				// the lock. Neighbours the propagation touched get their own
-				// refresh (scheduled after, never while holding a lock). ---
-				var lightRefreshList = main.ListManaged(chunk.ChunkPosition).init(main.stackAllocator);
-				defer lightRefreshList.deinit();
-				mesh.relightSunFromFragment(&lightRefreshList);
 				mesh.mutex.lock();
 				mesh.finishData();
 				mesh.mutex.unlock();
 				mesh_storage.addToUpdateList(mesh);
-				for (lightRefreshList.items) |pos| {
-					if (!std.meta.eql(pos, self.pos)) scheduleLightRefresh(pos);
-				}
-				// --- ASHFRAME CUSTOM CLIENT ---
 			}
 		}
 

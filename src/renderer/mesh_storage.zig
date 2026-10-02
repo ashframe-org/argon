@@ -45,12 +45,11 @@ const PendingLightMesh = struct {
 	atMs: i64,
 	retries: u8 = 0,
 };
-/// Expiry re-stamps instead of dark-building (the serve path re-requests
-/// the still-missing fragment every frame). After this many expiries the
-/// fragment is assumed lost and the mesh builds anyway — a hole (which
-/// the client never retries) is worse than a dark mesh (which relights
-/// on arrival via relightMeshesForFragment below).
-const maxPendingLightRetries: u8 = 3;
+/// Expiry re-stamps instead of dark-building, and the fragment is actively
+/// re-requested (see the pending-mesh scan). After this many expiries the
+/// mesh is dropped (a temporary hole the client re-requests on movement)
+/// rather than built black, which could never recover.
+const maxPendingLightRetries: u8 = 12;
 var pendingLightMeshes: main.ListManaged(PendingLightMesh) = undefined;
 const maxPendingLightMeshes: usize = 512;
 const pendingLightMeshExpiryMs: i64 = 5000;
@@ -74,6 +73,8 @@ var mutex: main.utils.Mutex = .{};
 // still-missing positions, throttled so this never floods. ---
 var nearRerequestLastMs: i64 = 0;
 const nearRerequestIntervalMs: i64 = 1000;
+/// Slower cadence after the world is revealed (still catches dropped meshes).
+const nearRerequestIdleMs: i64 = 5000;
 const nearRerequestHalf: i32 = 192;
 
 // --- ASHFRAME CUSTOM CLIENT (perf: cache the visible-node traversal) ---
@@ -987,18 +988,15 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 					main.threadPool.addTask(task, &network.protocols.chunkTransmission.MeshGenerationTask.vtable);
 					_ = pendingLightMeshes.swapRemove(i);
 				} else if (expired) {
-					// --- ASHFRAME CUSTOM CLIENT: never build dark. Re-stamp
-					// so the serve path re-requests the fragment; only after
-					// maxPendingLightRetries expiries assume it lost and
-					// build anyway (a hole never retries; dark relights). ---
+					// --- ASHFRAME CUSTOM CLIENT (black-shadow fix): NEVER build
+					// dark. Building without the fragment produces a permanently
+					// black mesh (the sun channel is set only at mesh birth).
+					// Keep the mesh deferred and re-request the fragment (done
+					// above); only if it stays missing after a large retry budget
+					// do we drop it (a temporary hole that the client re-requests
+					// on movement) rather than show black. ---
 					if (entry.retries >= maxPendingLightRetries) {
-						const task = main.globalAllocator.create(network.protocols.chunkTransmission.MeshGenerationTask);
-						task.* = .{
-							.pos = entry.pos,
-							.data = entry.data,
-							.forceBuild = true,
-						};
-						main.threadPool.addTask(task, &network.protocols.chunkTransmission.MeshGenerationTask.vtable);
+						main.globalAllocator.free(entry.data);
 						_ = pendingLightMeshes.swapRemove(i);
 					} else {
 						pendingLightMeshes.items[i].atMs = nowMs;
@@ -1253,15 +1251,16 @@ pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {
 	return .{.total = total, .resident = resident};
 }
 
-/// While the world is still hidden by the clean-join reveal gate, re-issue
-/// requests for near-field chunks/lightmaps that have not arrived. Bounded to
-/// once per `nearRerequestIntervalMs` and to the fixed near-field box the
-/// prefetch warms, so it only covers the area the gate actually measures.
+/// Re-issue requests for near-field chunks/lightmaps that never arrived: a
+/// request the server deferred/dropped, or a mesh we deliberately dropped
+/// rather than build black. The client otherwise never retries once
+/// stationary. Runs once per `nearRerequestIntervalMs` while the join gate is
+/// active, and at the slower `nearRerequestIdleMs` afterwards.
 /// Render/main thread only.
 fn rerequestMissingNearField(meshRequests: *main.ListManaged(chunk.ChunkPosition), mapRequests: *main.ListManaged(LightMap.MapFragmentPosition)) void {
-	if (main.ashframe_client.isWorldRevealed()) return;
 	const nowMs = main.timestamp().toMilliseconds();
-	if (nowMs -% nearRerequestLastMs < nearRerequestIntervalMs) return;
+	const interval: i64 = if (main.ashframe_client.isWorldRevealed()) nearRerequestIdleMs else nearRerequestIntervalMs;
+	if (nowMs -% nearRerequestLastMs < interval) return;
 	nearRerequestLastMs = nowMs;
 	const px = lastPx;
 	const py = lastPy;

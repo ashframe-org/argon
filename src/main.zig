@@ -73,7 +73,12 @@ pub var io: std.Io = threadedIo.io();
 
 pub fn initThreadLocals() void {
 	seed = @bitCast(@as(i64, @truncate(timestamp().nanoseconds)));
-	stackAllocatorBase = heap.StackAllocator.init(globalAllocator, 1 << 23);
+	// --- ASHFRAME CUSTOM (memory): 8 MiB per thread was committed eagerly
+	// on every thread (pool workers + network + audio + io) = ~128 MiB on a
+	// big machine, mostly untouched. Real per-frame stack use is far below
+	// 2 MiB; overflow already falls back to the backing allocator, so this is
+	// a safe 4x reduction.
+	stackAllocatorBase = heap.StackAllocator.init(globalAllocator, 1 << 21);
 	stackAllocator = stackAllocatorBase.allocator();
 	heap.GarbageCollection.addThread();
 }

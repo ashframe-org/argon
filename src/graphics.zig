@@ -1857,7 +1857,11 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	pub fn deinit(self: *FrameBuffer) void {
 		c.glDeleteFramebuffers(1, &self.frameBuffer);
 		if (self.hasDepthTexture) {
-			c.glDeleteRenderbuffers(1, &self.depthTexture);
+			// --- ASHFRAME CUSTOM (VRAM fix): the depth attachment is a
+			// texture (glGenTextures/glFramebufferTexture2D), so it must be
+			// freed with glDeleteTextures - glDeleteRenderbuffers was wrong
+			// and leaked it on every teardown. ---
+			c.glDeleteTextures(1, &self.depthTexture);
 		}
 		c.glDeleteTextures(1, &self.texture);
 	}

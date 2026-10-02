@@ -55,7 +55,9 @@ pub const client = struct { // MARK: client
 			},
 		);
 
-		nodeBuffer.init(main.globalAllocator, 1 << 20, 15);
+		// --- ASHFRAME CUSTOM (VRAM): was 1<<20 Mat4f = 64 MB reserved up
+		// front; only entities near the player need nodes. Grow on demand.
+		nodeBuffer.init(main.globalAllocator, 1 << 12, 15);
 	}
 	pub fn deinit() void {
 		pipeline.deinit();

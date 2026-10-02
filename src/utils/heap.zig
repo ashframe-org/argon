@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const build_options = @import("build_options");
@@ -8,9 +9,20 @@ const main = @import("main");
 var testingErrorHandlingAllocator = ErrorHandlingAllocator.init(std.testing.allocator);
 pub const testingAllocator = testingErrorHandlingAllocator.allocator();
 
+// --- ASHFRAME CUSTOM (performance: fast allocator in release builds) ---
+// Upstream routed EVERY allocation through std.heap.DebugAllocator, even in
+// ReleaseFast/ReleaseSafe. It is documented as "slow and wasteful": a global
+// mutex per alloc/free, 128 KiB minimum slabs, no address reuse, bookkeeping
+// on every call. On a multithreaded chunk-meshing workload that is a real
+// CPU (contention) and RAM (slab waste) tax. The debug allocator is only
+// useful for its leak detection, so keep it in Debug builds and use the
+// lock-free, scalable smp_allocator for release builds.
+const useDebugAllocator = builtin.mode == .Debug;
 pub const allocators = struct { // MARK: allocators
-	pub var globalGpa = std.heap.DebugAllocator(.{.thread_safe = true}){};
-	pub var handledGpa = ErrorHandlingAllocator.init(globalGpa.allocator());
+	/// Backing GPA, only meaningful in Debug builds (leak check).
+	var debugGpa = std.heap.DebugAllocator(.{.thread_safe = true}){};
+
+	pub var handledGpa = ErrorHandlingAllocator.init(if (useDebugAllocator) debugGpa.allocator() else std.heap.smp_allocator);
 	pub var globalArenaAllocator: NeverFailingArenaAllocator = .init(handledGpa.allocator());
 	pub var worldArenaAllocator: NeverFailingArenaAllocator = undefined;
 	var worldArenaOpenCount: usize = 0;
@@ -20,11 +32,13 @@ pub const allocators = struct { // MARK: allocators
 		std.log.info("Clearing global arena with {} MiB", .{globalArenaAllocator.arena.queryCapacity() >> 20});
 		globalArenaAllocator.deinit();
 		globalArenaAllocator = undefined;
-		if (globalGpa.deinit() == .leak) {
-			std.log.err("Memory leak", .{});
+		if (useDebugAllocator) {
+			if (debugGpa.deinit() == .leak) {
+				std.log.err("Memory leak", .{});
+			}
 		}
-		globalGpa = undefined;
 	}
+	// --- ASHFRAME CUSTOM ---
 
 	pub fn createWorldArena() void {
 		worldArenaMutex.lock();

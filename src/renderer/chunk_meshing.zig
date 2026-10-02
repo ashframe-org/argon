@@ -127,13 +127,19 @@ pub fn init() void {
 
 	vao = .init(graphics.VertexArray.EmptyVertex, &.{}, &rawData);
 
+	// --- ASHFRAME CUSTOM (VRAM): these used to preallocate 1<<20 entries
+	// each. glBufferStorage commits that up front, so the game reserved
+	// ~300 MB VRAM before meshing a single chunk. Start small and let the
+	// existing doubling path grow only as needed. FaceData (8 B) and
+	// ChunkData (~144 B) are the big ones; 1<<14 / 1<<13 are comfortably
+	// above a typical frame's live set.
 	for (0..settings.highestSupportedLod + 1) |i| {
-		faceBuffers[i].init(main.globalAllocator, 1 << 20, 3);
-		lightBuffers[i].init(main.globalAllocator, 1 << 20, 10);
+		faceBuffers[i].init(main.globalAllocator, 1 << 14, 3);
+		lightBuffers[i].init(main.globalAllocator, 1 << 14, 10);
 	}
-	chunkBuffer.init(main.globalAllocator, 1 << 20, 6);
-	commandBuffer.init(main.globalAllocator, 1 << 20, 8);
-	chunkIDBuffer.init(main.globalAllocator, 1 << 20, 9);
+	chunkBuffer.init(main.globalAllocator, 1 << 13, 6);
+	commandBuffer.init(main.globalAllocator, 1 << 13, 8);
+	chunkIDBuffer.init(main.globalAllocator, 1 << 13, 9);
 }
 
 pub fn deinit() void {

@@ -768,7 +768,11 @@ fn addQuad(info_: QuadInfo) error{Degenerate}!QuadIndex {
 			}
 		}
 
-		extraQuadInfo.lightSampleListForAxisAlignedModels = main.globalArena.dupe(LightSample, deduplicatedList.items);
+		// --- ASHFRAME CUSTOM (memory leak): this per-block-model light-sample
+		// list was allocated on globalArena, which is never freed until
+		// process exit - so it leaked on every world (re)join. worldArena is
+		// reset per world, and this data is only used while a world renders. ---
+		extraQuadInfo.lightSampleListForAxisAlignedModels = main.worldArena.dupe(LightSample, deduplicatedList.items);
 	}
 	extraQuadInfos.append(main.globalAllocator, extraQuadInfo);
 

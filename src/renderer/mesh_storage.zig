@@ -849,34 +849,33 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		}
 	}
 	// --- ASHFRAME CUSTOM CLIENT ---
-	while (updatableList.items.len != 0) {
-		// TODO: Find a faster solution than going through the entire list every frame.
-		var closestPriority: f32 = -std.math.floatMax(f32);
-		var closestIndex: usize = 0;
+	// --- ASHFRAME CUSTOM (perf): the old loop rescanned the entire list to
+	// find the closest pending mesh, then removed one and repeated - O(n^2)
+	// per frame on the render thread (the code even carried a TODO for it).
+	// Instead: filter once (drop out-of-range), compute priorities once, sort
+	// descending, then process in order until the frame budget is spent. ---
+	if (updatableList.items.len != 0) {
 		const playerPos = game.Player.getEyePosBlocking();
-		{
-			var i: usize = 0;
-			while (i < updatableList.items.len) {
-				const pos = updatableList.items[i];
-				if (!isInRenderDistance(pos)) {
-					_ = updatableList.swapRemove(i);
-					mutex.unlock();
-					defer mutex.lock();
-					continue;
-				}
-				const priority = pos.getPriority(playerPos);
-				if (priority > closestPriority) {
-					closestPriority = priority;
-					closestIndex = i;
-				}
-				i += 1;
-			}
-			if (updatableList.items.len == 0) break;
-		}
-		const pos = updatableList.swapRemove(closestIndex);
+		const ListEntry = struct { pos: chunk.ChunkPosition, priority: f32 };
+		var entries: main.ListManaged(ListEntry) = .init(main.stackAllocator);
+		defer entries.deinit();
 		mutex.unlock();
 		defer mutex.lock();
-		if (isInRenderDistance(pos)) {
+		entries.ensureCapacity(updatableList.items.len);
+		for (updatableList.items) |pos| {
+			if (!isInRenderDistance(pos)) continue;
+			entries.append(.{.pos = pos, .priority = pos.getPriority(playerPos)});
+		}
+		updatableList.clearRetainingCapacity();
+		std.sort.pdq(ListEntry, entries.items, {}, struct {
+			fn gt(_: void, a: ListEntry, b: ListEntry) bool {
+				return a.priority > b.priority;
+			}
+		}.gt);
+		for (entries.items) |entry| {
+			const pos = entry.pos;
+			mutex.unlock();
+			defer mutex.lock();
 			const node = getNodePointer(pos);
 			if (node.finishedMeshing) continue;
 			const mesh = getMesh(pos) orelse continue;
@@ -884,8 +883,8 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 			mesh.finishedMeshing = true;
 			updateHigherLodNodeFinishedMeshing(pos, true);
 			mesh.uploadData();
+			if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
 		}
-		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
 	}
 }
 

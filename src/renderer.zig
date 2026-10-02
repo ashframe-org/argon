@@ -145,8 +145,15 @@ pub fn updateFov(fov: f32) void {
 	}
 }
 pub fn updateViewport(width: u31, height: u31) void {
-	lastWidth = @trunc(@as(f32, @floatFromInt(width))*main.settings.resolutionScale);
-	lastHeight = @trunc(@as(f32, @floatFromInt(height))*main.settings.resolutionScale);
+	// --- ASHFRAME CUSTOM (VRAM churn): skip the full-screen attachment
+	// reallocation when the framebuffer size is unchanged. GLFW can fire the
+	// resize callback repeatedly with the same size (window drags, monitor
+	// moves), and each call re-uploads full-screen RGB16F + depth textures. ---
+	const newWidth: u31 = @intFromFloat(@trunc(@as(f32, @floatFromInt(width))*main.settings.resolutionScale));
+	const newHeight: u31 = @intFromFloat(@trunc(@as(f32, @floatFromInt(height))*main.settings.resolutionScale));
+	if (newWidth == lastWidth and newHeight == lastHeight) return;
+	lastWidth = newWidth;
+	lastHeight = newHeight;
 	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
 	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
 	worldFrameBuffer.unbind();

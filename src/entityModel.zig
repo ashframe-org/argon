@@ -230,7 +230,10 @@ pub const EntityModel = struct { // MARK: EntityModel
 		for (nodeDepthRemap.items, 0..) |nodeRemap, i| {
 			const node = data.nodes[nodeRemap.gltfNodeIndex];
 
-			const name = main.globalArena.dupe(u8, std.mem.span(node.name));
+			// --- ASHFRAME CUSTOM (memory leak): node names were duplicated on
+			// globalArena (freed only at exit), leaking once per world join.
+			// worldArena resets per world. ---
+			const name = main.worldArena.dupe(u8, std.mem.span(node.name));
 			self.nodeIndexMap.put(name, @intCast(i)) catch return error.EntityModelNodeWithTheSameName;
 
 			var pivotMat = Mat4f.translation(self.coordinateSystem.convertVec(node.translation, @splat(0)));

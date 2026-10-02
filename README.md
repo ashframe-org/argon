@@ -41,7 +41,7 @@ First join downloads everything once; repeats skip it.
 ```bash
 git clone -b ashframe https://github.com/ashframe-org/argon.git
 cd argon
-./run_linux.sh
+./run_linux.sh -Doptimize=ReleaseSafe
 ```
 
 **Windows**
@@ -49,7 +49,7 @@ cd argon
 ```bat
 git clone -b ashframe https://github.com/ashframe-org/argon.git
 cd argon
-run_windows.bat
+run_windows.bat -Doptimize=ReleaseSafe
 ```
 
 ## Keeping it up to date
@@ -57,7 +57,7 @@ run_windows.bat
 ```bash
 cd argon
 git pull
-./run_linux.sh
+./run_linux.sh -Doptimize=ReleaseSafe
 ```
 
 ## Optional config

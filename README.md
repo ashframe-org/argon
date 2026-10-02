@@ -86,7 +86,9 @@ git pull
 `ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
 `ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
 `ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
-`ashframeClickSignShop`, `mtuProbing`, `chatWidth`).
+`ashframeLoadingScreen`, `ashframeClickSignShop`, `mtuProbing`,
+`chatWidth`). Set `ashframeLoadingScreen = false` for vanilla-style
+instant joining instead of the clean-join screen.
 
 ## Notes
 

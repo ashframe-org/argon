@@ -176,6 +176,7 @@ fn hideConnectingDialog() void {
 /// still-rendering world; shows the Cubyz logo, a status + percentage line,
 /// and a progress bar. Reveal = this lifting once finishConnect runs.
 pub fn renderOverlay() void {
+	if (!settings.launchConfig.ashframeLoadingScreen) return;
 	if (main.ashframe_client.isWorldRevealed()) return;
 	const screen = main.Window.getWindowSize();
 	const draw = main.graphics.draw;
@@ -293,7 +294,7 @@ pub fn update() void {
 				const pp = main.game.Player.getPosBlocking();
 				main.ashframe_client.kickPrefetch(@as(i32, @intFromFloat(pp[0])), @as(i32, @intFromFloat(pp[1])), @as(i32, @intFromFloat(pp[2])));
 			}
-			if (main.ashframe_client.isActive()) {
+			if (main.ashframe_client.isActive() and settings.launchConfig.ashframeLoadingScreen) {
 				// Handshake done -> now take over with the fullscreen overlay.
 				// Close every other window first so nothing flashes over it.
 				main.ashframe_client.setWorldRevealed(false);
@@ -303,6 +304,8 @@ pub fn update() void {
 				setLoadStatus("Loading chunks...");
 				state.store(.warming, .release);
 			} else {
+				// Clean-join screen disabled (or cache inactive): reveal
+				// immediately, vanilla-style. The cache/prefetch still runs.
 				finishConnect();
 			}
 			// --- ASHFRAME CUSTOM CLIENT ---

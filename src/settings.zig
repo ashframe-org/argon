@@ -233,6 +233,9 @@ pub const launchConfig = struct {
 	pub var ashframeReadCacheMB: u32 = 128;
 	/// Extra diagnostic logs ([timing] join stages, cache decisions).
 	pub var ashframeDebug: bool = true;
+	/// Show the Ashframe clean-join loading screen on connect. false =
+	/// vanilla-style instant reveal (the cache still runs, just ungated).
+	pub var ashframeLoadingScreen: bool = true;
 	/// Click a sign to open its shop (Argon). Off = stock edit-on-click.
 	pub var ashframeClickSignShop: bool = true;
 	// --- ASHFRAME (MTU probing, upstream PR #3633 port) ---
@@ -264,6 +267,7 @@ pub const launchConfig = struct {
 		ashframeCacheMaxMB = zon.get(u32, "ashframeCacheMaxMB") orelse ashframeCacheMaxMB;
 		ashframeReadCacheMB = zon.get(u32, "ashframeReadCacheMB") orelse ashframeReadCacheMB;
 		ashframeDebug = zon.get(bool, "ashframeDebug") orelse ashframeDebug;
+		ashframeLoadingScreen = zon.get(bool, "ashframeLoadingScreen") orelse ashframeLoadingScreen;
 		chatWidth = zon.get(f32, "chatWidth") orelse chatWidth;
 		mtuProbing = zon.get(bool, "mtuProbing") orelse mtuProbing;
 		// --- ASHFRAME CUSTOM CLIENT ---

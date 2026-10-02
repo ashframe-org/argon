@@ -15,5 +15,6 @@
     .ashframeCacheMaxMB = 256, // on-disk per-server budget, then evict
     .ashframeReadCacheMB = 128, // in-RAM read cache: cleared on disconnect, warmed on connect (0 disables)
     .ashframeDebug = true, // [timing] join logs + cache info lines
+    .ashframeLoadingScreen = true, // clean-join loading screen; false = vanilla-style instant reveal
     .chatWidth = 480, // chat window width in px (256..1200)
 }

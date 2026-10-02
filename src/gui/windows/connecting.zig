@@ -321,19 +321,26 @@ pub fn update() void {
 				warmT0 = nowMs;
 				main.ashframe_client.noteWarmingStart(nowMs);
 			}
-			const pp = main.game.Player.getPosBlocking();
+			// Use the EYE position (the mesh system centres its built volume on
+			// the eye, see main.zig render call). Feet vs eye can land in
+			// different chunk cells at a boundary, which would make the gate
+			// check a column that isn't the one being built.
+			const pp = main.game.Player.getEyePosBlocking();
 			const px: i32 = @intFromFloat(pp[0]);
 			const py: i32 = @intFromFloat(pp[1]);
 			const cov = main.renderer.mesh_storage.nearLightCoverage(px, py);
 			const meshCov = main.renderer.mesh_storage.nearMeshCoverage(px, py, @intFromFloat(pp[2]));
 			// 80%: a couple of still-loading far/near chunks must not block the
-			// join. Coverage is now RD/LOD-aware (see mesh_storage) so this is
-			// reachable at every render distance.
+			// join. Coverage counts exactly the built near-field set (see
+			// mesh_storage.forEachBuiltNearMeshCell), so this is reachable at
+			// every render distance.
 			const covered = (cov.total == 0 or cov.resident*5 >= cov.total*4) and
 				(meshCov.total == 0 or meshCov.resident*5 >= meshCov.total*4);
 			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total, meshCov.resident, meshCov.total);
 			loadFraction = status.fraction;
-			const pastCap = nowMs -% warmT0 >= main.ashframe_client.warmCapMs and status.stage != .ready;
+			// Match the text threshold to the actual reveal cap so the UI does
+			// not say "taking longer" for a window it isn't judging yet.
+			const pastCap = nowMs -% warmT0 >= main.ashframe_client.worldRevealCapMs and status.stage != .ready;
 			const stageText: []const u8 = if (pastCap)
 				"Taking longer than usual..."
 			else switch (status.stage) {

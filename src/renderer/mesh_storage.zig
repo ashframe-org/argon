@@ -951,6 +951,13 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		const nowMs = main.timestamp().toMilliseconds();
 		if (newMapsStored or nowMs -% pendingLightScanMs >= 1000) {
 			pendingLightScanMs = nowMs;
+			// Missing fragments a deferred mesh is still waiting on get
+			// re-requested here: the client never retries on its own, so a
+			// dropped/lost fragment would otherwise strand the mesh (and, after
+			// the force-build fallback, leave it dark until relit). Bounded by
+			// the pending-mesh count and sent once per scan.
+			var fragReqs: main.ListManaged(LightMap.MapFragmentPosition) = .init(main.stackAllocator);
+			defer fragReqs.deinit();
 			var i: usize = pendingLightMeshes.items.len;
 			while (i > 0) {
 				i -= 1;
@@ -958,6 +965,15 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 				const hasFragment = getLightMapPiece(entry.pos.wx, entry.pos.wy, entry.pos.voxelSize) != null;
 				const expired = nowMs -% entry.atMs >= pendingLightMeshExpiryMs;
 				const inRange = isInRenderDistance(entry.pos);
+				if (!hasFragment and inRange) {
+					const fsize: i32 = @as(i32, LightMap.LightMapFragment.mapSize)*@as(i32, @intCast(entry.pos.voxelSize));
+					fragReqs.append(.{
+						.wx = entry.pos.wx & ~(fsize - 1),
+						.wy = entry.pos.wy & ~(fsize - 1),
+						.voxelSize = entry.pos.voxelSize,
+						.voxelSizeShift = @intCast(std.math.log2_int(u31, entry.pos.voxelSize)),
+					});
+				}
 				if (!inRange) {
 					main.globalAllocator.free(entry.data);
 					_ = pendingLightMeshes.swapRemove(i);
@@ -988,6 +1004,11 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 						pendingLightMeshes.items[i].atMs = nowMs;
 						pendingLightMeshes.items[i].retries += 1;
 					}
+				}
+			}
+			if (fragReqs.items.len != 0) {
+				if (game.world) |w| {
+					network.protocols.lightMapRequest.sendRequest(w.conn, fragReqs.items);
 				}
 			}
 		}
@@ -1142,40 +1163,70 @@ fn boxInRenderVolume(px: i32, py: i32, rd: i32, minX: i64, minY: i64, maxX: i64,
 	return ddx*ddx + ddy*ddy <= r*r;
 }
 
-pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
-	var total: u32 = 0;
-	var resident: u32 = 0;
-	const rd: u16 = if (lastRD != 0) lastRD else settings.renderDistance;
+// --- ASHFRAME CUSTOM CLIENT (clean join): iterate exactly the mesh cells the
+// BFS/render pipeline builds near the player, per LOD. `createNewMeshes` walks
+// a DISK: the Y range is reduced per X, and the Z range per Y, via
+// `reduceRenderDistance`. The reveal gate must count this same set, otherwise
+// its denominator includes cells that are never built and the ratio is
+// unreachable (this was the RD5 "taking longer than usual" stall: a full
+// rectangle of 726 cells vs at most 528 buildable => max 72.7% < 80%).
+// ---
+/// Calls `cb` once per (x,y) built cell, with the built Z cell nearest `pz`
+/// (the near-field column the reveal gate measures). This keeps the gate on
+/// the near surface column while restricting the (x,y) footprint to the DISK
+/// `createNewMeshes` actually builds, so `resident` can reach `total`.
+fn forEachBuiltNearMeshCell(px: i32, py: i32, pz: i32, rd: u16, comptime Ctx: type, ctx: Ctx, comptime cb: fn (Ctx, chunk.ChunkPosition) void) void {
 	for (0..@as(usize, settings.highestLod) + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const vs: u31 = @as(u31, 1) << lod;
 		const sz: i32 = chunk.chunkSize*@as(i32, @intCast(vs));
 		const mask: i32 = sz - 1;
 		const invMask: i32 = ~mask;
-		// EXACTLY mirror createNewMeshes' per-LOD X/Y bounds (same mask math), so
-		// the coverage denominator counts only cells the client actually builds.
-		// The previous one-cell-wider walk added unbuildable edge cells that made
-		// the gate unreachable at low render distance (see the RD5 stall).
-		const maxRDNew: i32 = @as(i32, @intCast(rd))*chunk.chunkSize << lod;
-		const minX = px -% maxRDNew & invMask;
-		const maxX = px +% maxRDNew +% sz & invMask;
+		const maxRD: i32 = @as(i32, @intCast(rd))*chunk.chunkSize << lod;
+
+		const minX = px -% maxRD & invMask;
+		const maxX = px +% maxRD +% sz & invMask;
 		var cx = minX;
 		while (cx != maxX) : (cx +%= sz) {
-			const minY = py -% maxRDNew & invMask;
-			const maxY = py +% maxRDNew +% sz & invMask;
+			var deltaX: i64 = @abs(cx +% @divTrunc(sz, 2) -% px);
+			deltaX = @max(0, deltaX - @divTrunc(sz, 2));
+			const maxYRD: i32 = reduceRenderDistance(maxRD, deltaX);
+
+			const minY = py -% maxYRD & invMask;
+			const maxY = py +% maxYRD +% sz & invMask;
 			var cy = minY;
 			while (cy != maxY) : (cy +%= sz) {
-				// Vertical: the column of chunk(s) around the player's height.
-				const cz = pz & ~mask;
-				total += 1;
-				const node = getNodePointer(.{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
-				if (node.mesh.load(.acquire)) |mesh| {
-					if (mesh.finishedMeshing) resident += 1;
-				}
+				var deltaY: i64 = @abs(cy +% @divTrunc(sz, 2) -% py);
+				deltaY = @max(0, deltaY - @divTrunc(sz, 2));
+				var maxZRD: i32 = reduceRenderDistance(maxYRD, deltaY);
+				if (maxZRD == 0) maxZRD -= @divTrunc(sz, 2);
+
+				// The single built Z cell containing pz. It is always inside the
+				// built Z range because maxZRD >= 0 (clamped above), so this cell
+				// is genuinely requested and can become resident.
+				const cz = pz & invMask;
+				cb(ctx, .{.wx = cx, .wy = cy, .wz = cz, .voxelSize = vs});
 			}
 		}
 	}
-	return .{.total = total, .resident = resident};
+}
+
+pub fn nearMeshCoverage(px: i32, py: i32, pz: i32) NearCoverage {
+	const rd: u16 = if (lastRD != 0) lastRD else settings.renderDistance;
+	const Ctx = struct {
+		total: u32 = 0,
+		resident: u32 = 0,
+		fn cb(self: *@This(), pos: chunk.ChunkPosition) void {
+			self.total += 1;
+			const node = getNodePointer(pos);
+			if (node.mesh.load(.acquire)) |mesh| {
+				if (mesh.finishedMeshing) self.resident += 1;
+			}
+		}
+	};
+	var ctx = Ctx{};
+	forEachBuiltNearMeshCell(px, py, pz, rd, *Ctx, &ctx, Ctx.cb);
+	return .{.total = ctx.total, .resident = ctx.resident};
 }
 
 pub fn nearLightCoverage(px: i32, py: i32) NearCoverage {

@@ -1481,8 +1481,8 @@ fn invalidateLightMapIn(dir: main.files.Dir, x: i32, y: i32, vs: u31) void {
 
 /// Connect-time prefetch: warms the read cache on a worker so the world
 /// reveals already lit. Kicked once per session by the first teleport
-/// (spawn position); the reveal gate waits for completion or warmCapMs.
-pub const warmCapMs: i64 = 3000;
+/// (spawn position). The reveal gate waits for it (plus coverage) or the
+/// hard `worldRevealCapMs`.
 /// Safety cap on the connect prefetch; the intended set is ~3023 positions
 /// (±192 fine / ±768 coarse across the 6 LODs). If a radius change ever
 /// balloons it again, stop rather than flooding the disk/serve path.

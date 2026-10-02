@@ -40,6 +40,11 @@ var warmT0: i64 = 0;
 var loadStatusText: []const u8 = "Connecting...";
 var loadStatusOwned: bool = false;
 var loadFraction: f32 = 0;
+/// True before the measurable `.warming` phase (handshake + blocking asset
+/// load). The bar then animates indeterminately so the player sees motion
+/// even though we cannot measure progress during the main-thread freeze.
+var loadIndeterminate: bool = true;
+var barAnimT: f64 = 0;
 
 /// Set the overlay status text, freeing the previous owned copy.
 fn setLoadStatus(text: []const u8) void {
@@ -79,6 +84,7 @@ pub fn start(_ip: []const u8, manager: *ConnectionManager) void {
 	}
 	loadStatusText = "Connecting...";
 	loadFraction = 0;
+	loadIndeterminate = true; // handshake/assets phase has no measurable % yet
 	// --- ASHFRAME CUSTOM CLIENT (clean join) ---
 	connectionManager = manager;
 	state = .init(.connecting);
@@ -160,31 +166,56 @@ pub fn renderOverlay() void {
 	defer draw.restoreColor(oldColor);
 	draw.rect(.{0, 0}, screen);
 
-	// Progress bar near the bottom, leaving the center for the dialog.
+	// Progress bar near the bottom. High contrast: light track + border +
+	// bright fill, so it reads clearly on the dark backdrop.
 	const barW = @min(screen[0]*0.5, 420);
-	const barH: f32 = 12;
+	const barH: f32 = 16;
 	const barX = (screen[0] - barW)/2;
 	const barY = screen[1]*0.78;
+	const border: f32 = 2;
+	// Outer border (light gray).
 	{
-		const track = draw.setColor(0x40ffffff);
-		defer draw.restoreColor(track);
+		const c0 = draw.setColor(0xffc8d0dc);
+		defer draw.restoreColor(c0);
+		draw.rect(.{barX - border, barY - border}, .{barW + 2*border, barH + 2*border});
+	}
+	// Track (solid mid gray - visible, unlike the old 25%-alpha white).
+	{
+		const c0 = draw.setColor(0xff37404f);
+		defer draw.restoreColor(c0);
 		draw.rect(.{barX, barY}, .{barW, barH});
 	}
-	const frac = @min(@max(loadFraction, 0), 1);
-	if (frac > 0) {
-		const fill = draw.setColor(0xff00d0a0);
-		defer draw.restoreColor(fill);
-		draw.rect(.{barX, barY}, .{barW*frac, barH});
+	// Fill: measurable fraction, or an animated indeterminate sweep.
+	{
+		const c0 = draw.setColor(0xff2ee6a6);
+		defer draw.restoreColor(c0);
+		if (loadIndeterminate) {
+			// A ~30% wide band sweeping left->right, looping, clipped to the
+			// track. Compute the visible intersection [lo, hi] with [barX, barX+barW].
+			const bandW = barW*0.3;
+			const span = barW + bandW;
+			const t = @mod(barAnimT*0.06, 1.0);
+			const x = barX - bandW + @as(f32, @floatCast(t))*span;
+			const lo = @max(x, barX);
+			const hi = @min(x + bandW, barX + barW);
+			if (hi > lo) draw.rect(.{lo, barY}, .{hi - lo, barH});
+		} else {
+			const frac = @min(@max(loadFraction, 0), 1);
+			if (frac > 0) draw.rect(.{barX, barY}, .{barW*frac, barH});
+		}
 	}
-	// Percentage centered just below the bar.
+	// Percentage (or a "…" while indeterminate) centered below the bar.
 	var pctBuf: [16]u8 = undefined;
-	const pct = std.fmt.bufPrint(&pctBuf, "{d:.0}%", .{frac*100}) catch "0%";
-	var pctLabel = Label.init(.{barX + barW/2 - 32, barY + barH + 6}, 64, pct, .center);
+	const pct: []const u8 = if (loadIndeterminate) "..." else std.fmt.bufPrint(&pctBuf, "{d:.0}%", .{@min(@max(loadFraction, 0), 1)*100}) catch "0%";
+	var pctLabel = Label.init(.{barX + barW/2 - 32, barY + barH + 8}, 64, pct, .center);
 	defer pctLabel.deinit();
 	pctLabel.render(.{0, 0});
 }
 
 pub fn update() void {
+	// Drive the indeterminate bar animation from wall time (only visible
+	// during the pre-warming phase; cheap either way).
+	barAnimT = @as(f64, @floatFromInt(main.timestamp().toMilliseconds()))*0.001;
 	stateSwitch: switch (state.load(.acquire)) {
 		.connecting => {},
 		.connected => {
@@ -221,6 +252,7 @@ pub fn update() void {
 				// first world frames can stall on serve work, and that
 				// stall must not consume the warmup cap.
 				warmT0 = 0;
+				loadIndeterminate = false; // now measurable
 				setLoadStatus("Loading lightmaps...");
 				state.store(.warming, .release);
 			} else {
@@ -246,7 +278,7 @@ pub fn update() void {
 			// or the world reveals with visible holes.
 			const covered = (cov.total == 0 or cov.resident*10 >= cov.total*9) and
 				(meshCov.total == 0 or meshCov.resident*10 >= meshCov.total*9);
-			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total);
+			const status = main.ashframe_client.loadStatus(nowMs, covered, cov.resident, cov.total, meshCov.resident, meshCov.total);
 			loadFraction = status.fraction;
 			// Stage text, unless we're past the cap (then the "taking longer"
 			// hint stays up instead of being overwritten each frame).

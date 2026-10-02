@@ -1387,18 +1387,20 @@ pub const LoadStatus = struct {
 /// storage lightmap coverage query (callers own the world/player access).
 /// When inactive (not the Ashframe server) we report ready immediately so
 /// vanilla/other servers keep their stock (instant) reveal.
-pub fn loadStatus(nowMs: i64, covered: bool, covResident: usize, covTotal: usize) LoadStatus {
+pub fn loadStatus(nowMs: i64, covered: bool, covResident: usize, covTotal: usize, meshResident: usize, meshTotal: usize) LoadStatus {
 	if (!isActive()) return .{.fraction = 1.0, .stage = .ready};
 	var frac: f32 = StageProgress.connecting; // handshake done by the time warming runs
 	// Assets: unpack/load is blocking on the main thread, so by the time we
 	// are here it is complete.
 	frac += StageProgress.assets;
-	// World readiness: lightmaps + meshes both feed the bar so it does not
-	// appear stuck while meshes finish (covered already reflects both).
+	// World readiness: min(lightmaps, meshes) so BOTH must be ready before
+	// the bar (and the gate) reaches the top - meshes are usually the slower
+	// half and were previously not reflected at all.
 	const covFrac: f32 = if (covTotal == 0) 1.0 else @min(1.0, @as(f32, @floatFromInt(covResident))/@as(f32, @floatFromInt(covTotal)));
+	const meshFrac: f32 = if (meshTotal == 0) 1.0 else @min(1.0, @as(f32, @floatFromInt(meshResident))/@as(f32, @floatFromInt(meshTotal)));
 	const warmFrac: f32 = if (isWarmupDone()) 1.0 else 0.35;
-	const lm = @max(warmFrac, covFrac);
-	frac += StageProgress.lightmaps*lm;
+	const world = @min(@max(warmFrac, covFrac), meshFrac);
+	frac += StageProgress.lightmaps*world;
 	// Time: all-or-nothing (a single packet).
 	const clockOk = isTimeSynced();
 	frac += StageProgress.time*(if (clockOk) @as(f32, 1.0) else 0.0);

@@ -24,9 +24,10 @@ Lightweight Modification that brings improved game & network performance along w
 - Set `ashframeDebug = false` in `launchConfig.zon` to silence the
   `[fps]`/cache debug logging.
 
-## Comparison (measured on the live Ashframe server, Sep 2026)
+## Comparison (live Ashframe server, Sep–Oct 2026)
 
-Average of test sessions; `~` = approximate. Ranked best-on-the-right
+Timings are measured session averages (`~` = approximate); behaviour rows
+(marked ✳) are qualitative/verified by testing, not timed.
 
 | Task | Vanilla + Vanilla | Vanilla + Ashframe | Argon + Vanilla | Argon + Ashframe |
 |---|---|---|---|---|
@@ -35,14 +36,21 @@ Average of test sessions; `~` = approximate. Ranked best-on-the-right
 | Chunk download rate | ~7.6 MB/s ❌ | ~11.1 MB/s ✅ | ~7.6 MB/s 🟡 | ~11.1 MB/s ✅ |
 | Terrain-gen stall | ~162 ms/chunk ❌ | ~5 ms/chunk ✅ | ~162 ms/chunk ❌ | ~5 ms/chunk ✅ |
 | Revisit / teleport back | full re-stream ❌ | full re-stream ❌ | ~0.16 s ✅ | ~0.16 s ✅ |
+| High render-distance FPS ✳ | stock ❌ | stock ❌ | high ✅ | high ✅ |
+| Join first frame (dark/flash) ✳ | flash ❌ | flash ❌ | clean ✅ | clean ✅ |
+| Flashing water/glass (some GPUs) ✳ | yes ❌ | yes ❌ | fixed ✅ | fixed ✅ |
+| Background network traffic ✳ | high ❌ | reduced ✅ | high ❌ | reduced ✅ |
+| Startup GPU memory ✳ | stock 🟡 | stock 🟡 | lower ✅ | lower ✅ |
+| Stalls on high-latency / lossy links ✳ | — ➖ | — ➖ | — ➖ | fewer ✅ |
 | Shop icons / click-to-buy | no ❌ | no ❌ | yes ✅ | yes ✅ |
 | Mentions / autocomplete | no ❌ | partial 🟡 | yes ✅ | yes ✅ |
-| Chunk-visibility traversal | every frame ❌ | every frame ❌ | cached ✅ | cached ✅ |
 | Extra RAM | — ➖ | — ➖ | ~128 MB 🟡 | ~128 MB 🟡 |
 
 
 `Vanilla + Ashframe` = server optimisations only. `Argon + Vanilla` =
-client-only (cache, icons, chat, shops). `Argon + Ashframe` = both.
+client-only (cache, performance, clean join, icons, chat, shops). The
+high-latency/lossy-link row needs both: the Ashframe server probes and the
+Argon client answers.
 
 First join downloads everything once; repeats skip it.
 

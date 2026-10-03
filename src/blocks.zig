@@ -843,6 +843,15 @@ pub const meshes = struct { // MARK: meshes
 		c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT);
 	}
 
+	// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---
+	/// Bind the per-texture animation-index SSBO (chunk shader binding 1) so any
+	/// offscreen block render that isn't inside the world pass reads valid
+	/// texture-array layer indices instead of uninitialized memory.
+	pub fn bindAnimationTexture() void {
+		if (animatedTextureSSBO) |ssbo| ssbo.bind(1);
+	}
+	// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---
+
 	fn finishTextureLoading() void {
 		animationData = main.worldArena.alloc(AnimationData, textureIds.items.len);
 		textureOcclusionData = main.worldArena.alloc(std.atomic.Value(bool), textureIds.items.len);

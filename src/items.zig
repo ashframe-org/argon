@@ -1434,6 +1434,13 @@ pub fn reset() void {
 // made some inventory icons render blank (count only) until a rejoin. Run this
 // once after generateTextureArray(). Must be called from the main thread.
 pub fn warmAllTextures() void {
+	// The block-icon bake runs the normal chunk shader, which reads the
+	// per-texture animation/layer-index SSBO (binding 1). That buffer is only
+	// filled by preProcessAnimationData in the world pass; without running it
+	// first the bake fetches an invalid layer and the opaque shader discards
+	// every fragment (blank icons). Run it once here so binding 1 is valid.
+	const time: u32 = @intCast(main.timestamp().toMilliseconds() & std.math.maxInt(u32));
+	main.blocks.meshes.preProcessAnimationData(time);
 	for (0..itemListSize) |i| {
 		const item = &itemList[i];
 		_ = item.getTexture();

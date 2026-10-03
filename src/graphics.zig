@@ -2687,17 +2687,25 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 		main.blocks.meshes.emissionTextureArray.bind();
 		c.glActiveTexture(c.GL_TEXTURE2);
 		main.blocks.meshes.reflectivityAndAbsorptionTextureArray.bind();
-		block_texture.depthTexture.bindTo(5);
+		// The chunk fragment shader's dither test samples the dither texture on
+		// unit 5 (it was previously left as block_texture.depthTexture, which
+		// wrongly forced cutout blocks to discard).
+		c.glActiveTexture(c.GL_TEXTURE5);
+		main.blocks.meshes.ditherTexture.bind();
 		// --- ASHFRAME CUSTOM CLIENT (inventory icon fix): the chunk shader
-		// reads its geometry from indexed SSBOs (_faceData=3, _quads=4,
-		// _lightData=10). uploadData() only does glBindBuffer, and this
-		// function previously relied on whatever bindings the last world frame
-		// left. On the first join (before any world frame / uploadModels) those
-		// pointed at the wrong LOD buffers, so the block rendered as garbage and
-		// the icon came out blank until a rejoin. Bind them explicitly here. ---
+		// reads geometry from indexed SSBOs (_faceData=3, _quads=4,
+		// _lightData=10), the chunk table (_chunks=6) and the per-texture
+		// animation/layer indices (_animatedTexture=1). uploadData() only does
+		// glBindBuffer, so this function used to rely on whatever the last world
+		// frame left. Outside the world pass (e.g. baking an inventory icon)
+		// those bindings were stale/uninitialized, and `_animatedTexture` in
+		// particular made the opaque shader fetch an invalid layer -> every
+		// fragment discarded -> blank icon. Bind them explicitly here. ---
 		main.renderer.chunk_meshing.faceBuffers[0].ssbo.bind(3);
 		main.renderer.chunk_meshing.lightBuffers[0].ssbo.bind(10);
+		main.renderer.chunk_meshing.chunkBuffer.ssbo.bind(6);
 		main.models.bindQuads();
+		main.blocks.meshes.bindAnimationTexture();
 		// --- ASHFRAME CUSTOM CLIENT ---
 		c.glDrawElementsInstancedBaseVertexBaseInstance(c.GL_TRIANGLES, @intCast(6*faceData.items.len), c.GL_UNSIGNED_INT, null, 1, allocation.start*4, chunkAllocation.start);
 	}

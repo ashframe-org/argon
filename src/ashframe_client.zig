@@ -3,9 +3,9 @@ const std = @import("std");
 const main = @import("main");
 
 // --- ASHFRAME CUSTOM CLIENT ---
-// Per-server asset + chunk caches. Active only on the configured Ashframe
-// server; inert elsewhere (no new packets, stock request flow).
-// Cache dir: ~/.cubyz/ashframeCache/<server>/ (delete to force redownload).
+// Per-server asset + chunk caches. Active for any dialed multiplayer server;
+// each server gets its own cache directory and handshake behavior is unchanged.
+// Cache dir: ~/.cubyz/serverCache/<server>/ (delete to force redownload).
 
 var dialAddress: ?[]u8 = null;
 
@@ -243,14 +243,12 @@ pub fn sessionEnd() void {
 	accessClear();
 }
 
-/// Master toggle on, live session, and dialed address matches Ashframe.
+/// Master toggle on, live session, and a dialed server address.
 pub fn isActive() bool {
-	if (!main.settings.launchConfig.ashframeCache) return false;
+	if (!main.settings.launchConfig.serverCache) return false;
 	if (!sessionLive.load(.acquire)) return false;
-	const dial = dialAddress orelse return false;
-	const want = main.settings.launchConfig.ashframeServer;
-	if (want.len == 0) return false;
-	return std.mem.indexOf(u8, dial, want) != null;
+	if (dialAddress == null) return false;
+	return true;
 }
 
 /// Filesystem-safe per-server key derived from the dial address.
@@ -273,7 +271,7 @@ fn serverKey(buf: *[256]u8) []const u8 {
 fn cacheDir(buf: *[256]u8) []const u8 {
 	var keyBuf: [256]u8 = undefined;
 	const key = serverKey(&keyBuf);
-	return std.fmt.bufPrint(buf, "ashframeCache/{s}", .{key}) catch "ashframeCache/unknown";
+	return std.fmt.bufPrint(buf, "serverCache/{s}", .{key}) catch "serverCache/unknown";
 }
 
 fn packHash(data: []const u8) u64 {
@@ -308,7 +306,7 @@ fn readMeta(dir: main.files.Dir) Meta {
 }
 
 fn cacheTtlMs() i64 {
-	return @as(i64, @intCast(main.settings.launchConfig.ashframeCacheTTLHours))*60*60*1000;
+	return @as(i64, @intCast(main.settings.launchConfig.serverCacheTTLHours))*60*60*1000;
 }
 
 /// Argon capability version announced at handshake (userData ZON).
@@ -340,7 +338,7 @@ fn writeMeta(dir: main.files.Dir, packHashValue: ?u64) void {
 	zon.put("formatVersion", @as(i64, cacheFormatVersion));
 	if (packHashValue) |h| zon.put("packHash", @as(i64, @bitCast(h)));
 	dir.writeZon(metaFile, zon) catch |err| {
-		std.log.err("Ashframe cache: could not write meta: {s}", .{@errorName(err)});
+		std.log.err("Server cache: could not write meta: {s}", .{@errorName(err)});
 	};
 }
 
@@ -366,7 +364,7 @@ pub fn checkAssetPack(packData: []const u8) PackStatus {
 	const dirPath = cacheDir(&dirBuf);
 	const cubyz = main.files.cubyzDir();
 	cubyz.makePath(dirPath) catch |err| {
-		std.log.err("Ashframe cache: could not create {s}: {s}", .{dirPath, @errorName(err)});
+		std.log.err("Server cache: could not create {s}: {s}", .{dirPath, @errorName(err)});
 		return .off;
 	};
 	var dir = cubyz.openDir(dirPath) catch return .off;
@@ -378,7 +376,7 @@ pub fn checkAssetPack(packData: []const u8) PackStatus {
 	if (meta.ts) |ts| {
 		const ttl = cacheTtlMs();
 		if (ttl > 0 and nowMs -% ts > ttl) {
-			infoLog("cache: expired (older than {d}h), flushing.", .{main.settings.launchConfig.ashframeCacheTTLHours});
+			infoLog("cache: expired (older than {d}h), flushing.", .{main.settings.launchConfig.serverCacheTTLHours});
 			var fresh = wipeCache(dirPath, h) orelse return .off;
 			defer fresh.close();
 			return .changed;
@@ -570,7 +568,7 @@ fn rewriteRegion(dir: main.files.Dir, path: []const u8, n: usize, lens: *[64]u32
 		off += l;
 	}
 	writeAtomic(dir, path, buf) catch |err| {
-		std.log.err("Ashframe cache: region store {s}: {s}", .{path, @errorName(err)});
+		std.log.err("Server cache: region store {s}: {s}", .{path, @errorName(err)});
 	};
 }
 
@@ -731,7 +729,7 @@ var flushMutex: main.utils.Mutex = .{};
 
 /// On-disk per-server budget (bytes). Random eviction down to 4/5 of cap.
 fn cacheMaxBytes() usize {
-	return @as(usize, main.settings.launchConfig.ashframeCacheMaxMB)*1024*1024;
+	return @as(usize, main.settings.launchConfig.serverCacheMaxMB)*1024*1024;
 }
 
 threadlocal var sweepCounter: u32 = 0;
@@ -831,7 +829,7 @@ fn lodOfRegionName(name: []const u8) u32 {
 // --- ASHFRAME CUSTOM CLIENT: RAM write buffer. ---
 // Received blobs stage here instead of hitting disk per chunk (thousands of
 // temp+rename cycles per join otherwise). Flushed to disk at
-// ashframeFlushMaxMB or every ashframeFlushIntervalMinutes, plus on
+// serverCacheFlushMaxMB or every serverCacheFlushIntervalMinutes, plus on
 // (re)connect and disconnect. Crash/kill loses at most one interval, which
 // just re-downloads; only complete flushes ever reach disk, so the on-disk
 // cache is never torn.
@@ -842,11 +840,11 @@ var ramMutex: main.utils.Mutex = .{};
 var lastFlushMs: std.atomic.Value(i64) = .init(0);
 
 fn flushMaxBytes() usize {
-	return @as(usize, main.settings.launchConfig.ashframeFlushMaxMB)*1024*1024;
+	return @as(usize, main.settings.launchConfig.serverCacheFlushMaxMB)*1024*1024;
 }
 
 fn flushIntervalMs() i64 {
-	return @as(i64, @intCast(main.settings.launchConfig.ashframeFlushIntervalMinutes))*60*1000;
+	return @as(i64, @intCast(main.settings.launchConfig.serverCacheFlushIntervalMinutes))*60*1000;
 }
 
 fn ramPut(name: []const u8, data: []const u8) void {
@@ -898,23 +896,15 @@ fn ramClear() void {
 	ramBytes = 0;
 }
 
-// --- ASHFRAME CUSTOM CLIENT: access index + one-shot filter (LRU eviction) ---
+// --- ASHFRAME CUSTOM CLIENT: access index (LRU eviction) ---
 // The disk cache is bounded, so what gets evicted matters: random eviction
 // dropped the chunks a player actually revisits (spawn) as readily as
-// one-shot deep-cave chunks. We instead track, per REGION FILE, the last
-// time it was read (LRU) so eviction drops the coldest first. Persisted in
-// a compact sidecar so ordering survives restarts.
-//
-// One-shot filter: a chunk that has only ever been loaded once (flown past
-// / fallen through) is not worth persisting. We keep a small in-RAM count
-// of how many times each blob has been requested; a blob is only staged to
-// the write buffer once it has been requested at least twice. This stops
-// deep-hole excursions from polluting the disk cache at all.
+// deep-cave chunks. We instead track, per REGION FILE, the last time it was
+// read (LRU) so eviction drops the coldest first. Persisted in a compact
+// sidecar so ordering survives restarts.
 var accessMutex: main.utils.Mutex = .{};
 var accessMap: std.StringHashMapUnmanaged(i64) = .empty; // regionPath -> last access ms
 var accessDirty: bool = false;
-var seenMutex: main.utils.Mutex = .{};
-var seenOnce: std.StringHashMapUnmanaged(void) = .empty; // names requested once
 
 fn accessCapEntries() usize {
 	return 8192;
@@ -937,6 +927,9 @@ fn accessTouch(regionPath: []const u8) void {
 	}
 	accessDirty = true;
 }
+
+var seenMutex: main.utils.Mutex = .{};
+var seenOnce: std.StringHashMapUnmanaged(void) = .empty; // names requested once
 
 /// Returns true the FIRST time `name` is seen, false on later calls. Used by
 /// the one-shot filter (only stage to disk after the second request).
@@ -1042,7 +1035,7 @@ var readBytes: usize = 0;
 var readTick: i64 = 0;
 
 fn readCapBytes() usize {
-	return @as(usize, main.settings.launchConfig.ashframeReadCacheMB)*1024*1024;
+	return @as(usize, main.settings.launchConfig.serverCacheReadCacheMB)*1024*1024;
 }
 
 fn readGet(name: []const u8) ?[]u8 {
@@ -1276,7 +1269,7 @@ fn flushRam(force: bool) void {
 		}
 		maybeSweep(dirPath);
 	} else {
-		std.log.err("Ashframe cache: flush failed, dropping {d} staged blobs (re-downloaded later)", .{batch.count()});
+		std.log.err("Server cache: flush failed, dropping {d} staged blobs (re-downloaded later)", .{batch.count()});
 		while (flushIt.next()) |kv| {
 			main.globalAllocator.free(kv.key_ptr.*);
 			main.globalAllocator.free(kv.value_ptr.*);

@@ -212,15 +212,13 @@ fn createLaunchConfig(b: *std.Build) !void {
 			\\    .autoEnterWorld = "",
 			\\    .headlessServer = false,
 			\\    // .preferredAuthenticationAlgorithm = .ed25519, // Uncomment and change this if you own a server in an outdated game version where the default algorithm got compromised.
-			\\    // --- Argon (Ashframe client) cache settings. On other servers
-			\\    // the client behaves like stock Cubyz 0.4.1. ---
-			\\    // .ashframeCache = true,
-			\\    // .ashframeServer = "cubyz.ashframe.net",
-			\\    // .ashframeCacheTTLHours = 24,
-			\\    // .ashframeFlushMaxMB = 256,
-			\\    // .ashframeFlushIntervalMinutes = 5,
-			\\    // .ashframeCacheMaxMB = 256,
-			\\    // .ashframeReadCacheMB = 128,
+			\\    // --- Argon per-server cache settings. ---
+			\\    // .serverCache = true,
+			\\    // .serverCacheTTLHours = 24,
+			\\    // .serverCacheFlushMaxMB = 256,
+			\\    // .serverCacheFlushIntervalMinutes = 5,
+			\\    // .serverCacheMaxMB = 256,
+			\\    // .serverCacheReadCacheMB = 128,
 			\\    // .ashframeDebug = true,
 			\\    // .chatWidth = 480,
 			\\}

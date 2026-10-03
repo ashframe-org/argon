@@ -217,20 +217,19 @@ pub const launchConfig = struct {
 
 	pub var vulkanTestingMode: bool = false;
 
-	// --- ASHFRAME CUSTOM CLIENT: per-server caches (inert elsewhere). ---
-	pub var ashframeCache: bool = true;
-	pub var ashframeServer: []const u8 = "cubyz.ashframe.net";
-	pub var ashframeCacheTTLHours: u32 = 24;
+	// --- ASHFRAME CUSTOM CLIENT: per-server caches (one directory per dialed server). ---
+	pub var serverCache: bool = true;
+	pub var serverCacheTTLHours: u32 = 24;
 	/// RAM write buffer: staged blobs flush to disk at this size (MB)…
-	pub var ashframeFlushMaxMB: u32 = 256;
+	pub var serverCacheFlushMaxMB: u32 = 256;
 	/// …or at this interval (minutes), whichever first. Plus on (re)connect.
-	pub var ashframeFlushIntervalMinutes: u32 = 5;
+	pub var serverCacheFlushIntervalMinutes: u32 = 5;
 	/// On-disk per-server budget (MB, real data — region files pack blobs
 	/// with ~no block waste). Random eviction down to 4/5 of cap.
-	pub var ashframeCacheMaxMB: u32 = 256;
+	pub var serverCacheMaxMB: u32 = 256;
 	/// In-RAM read cache (MB): blobs served from here never touch disk.
 	/// Cleared on disconnect, warmed by prefetch on connect. 0 disables.
-	pub var ashframeReadCacheMB: u32 = 128;
+	pub var serverCacheReadCacheMB: u32 = 128;
 	/// Extra diagnostic logs ([timing] join stages, cache decisions).
 	pub var ashframeDebug: bool = true;
 	/// Show the Ashframe clean-join loading screen on connect. false =
@@ -259,13 +258,13 @@ pub const launchConfig = struct {
 		preferredAuthenticationAlgorithm = zon.get(main.network.authentication.KeyTypeEnum, "preferredAuthenticationAlgorithm") orelse preferredAuthenticationAlgorithm;
 		vulkanTestingMode = zon.get(bool, "vulkanTestingMode") orelse false;
 		// --- ASHFRAME CUSTOM CLIENT ---
-		ashframeCache = zon.get(bool, "ashframeCache") orelse ashframeCache;
-		ashframeServer = main.globalArena.dupe(u8, zon.get([]const u8, "ashframeServer") orelse ashframeServer);
-		ashframeCacheTTLHours = zon.get(u32, "ashframeCacheTTLHours") orelse ashframeCacheTTLHours;
-		ashframeFlushMaxMB = zon.get(u32, "ashframeFlushMaxMB") orelse ashframeFlushMaxMB;
-		ashframeFlushIntervalMinutes = zon.get(u32, "ashframeFlushIntervalMinutes") orelse ashframeFlushIntervalMinutes;
-		ashframeCacheMaxMB = zon.get(u32, "ashframeCacheMaxMB") orelse ashframeCacheMaxMB;
-		ashframeReadCacheMB = zon.get(u32, "ashframeReadCacheMB") orelse ashframeReadCacheMB;
+		// Keep the old ashframeCache* keys as fallbacks so existing configs keep working.
+		serverCache = zon.get(bool, "serverCache") orelse zon.get(bool, "ashframeCache") orelse serverCache;
+		serverCacheTTLHours = zon.get(u32, "serverCacheTTLHours") orelse zon.get(u32, "ashframeCacheTTLHours") orelse serverCacheTTLHours;
+		serverCacheFlushMaxMB = zon.get(u32, "serverCacheFlushMaxMB") orelse zon.get(u32, "ashframeFlushMaxMB") orelse serverCacheFlushMaxMB;
+		serverCacheFlushIntervalMinutes = zon.get(u32, "serverCacheFlushIntervalMinutes") orelse zon.get(u32, "ashframeFlushIntervalMinutes") orelse serverCacheFlushIntervalMinutes;
+		serverCacheMaxMB = zon.get(u32, "serverCacheMaxMB") orelse zon.get(u32, "ashframeCacheMaxMB") orelse serverCacheMaxMB;
+		serverCacheReadCacheMB = zon.get(u32, "serverCacheReadCacheMB") orelse zon.get(u32, "ashframeReadCacheMB") orelse serverCacheReadCacheMB;
 		ashframeDebug = zon.get(bool, "ashframeDebug") orelse ashframeDebug;
 		ashframeLoadingScreen = zon.get(bool, "ashframeLoadingScreen") orelse ashframeLoadingScreen;
 		chatWidth = zon.get(f32, "chatWidth") orelse chatWidth;

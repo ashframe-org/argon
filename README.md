@@ -20,7 +20,7 @@ Lightweight Modification that brings improved game & network performance along w
 - faster handshake on high-latency links, stable ping.
 - Skips re-unpacking server addons when unchanged.
 - Fixes flashing translucent (water/glass) squares on some GPUs/drivers.
-- Delete `~/.cubyz/ashframeCache/` anytime to force a full redownload.
+- Delete `~/.cubyz/serverCache/` anytime to force a full redownload.
 - Set `ashframeDebug = false` in `launchConfig.zon` to silence the
   `[fps]`/cache debug logging.
 
@@ -83,12 +83,13 @@ git pull
 ## Optional config
 
 `launchConfig.zon` tweaks (defaults work out of the box; our keys are
-`ashframeCache`, `ashframeServer`, `ashframeCacheTTLHours`,
-`ashframeFlushMaxMB`, `ashframeFlushIntervalMinutes`,
-`ashframeCacheMaxMB`, `ashframeReadCacheMB`, `ashframeDebug`,
+`serverCache`, `serverCacheTTLHours`,
+`serverCacheFlushMaxMB`, `serverCacheFlushIntervalMinutes`,
+`serverCacheMaxMB`, `serverCacheReadCacheMB`, `ashframeDebug`,
 `ashframeLoadingScreen`, `ashframeClickSignShop`, `mtuProbing`,
 `chatWidth`). Set `ashframeLoadingScreen = false` for vanilla-style
-instant joining instead of the clean-join screen.
+instant joining instead of the clean-join screen. Older `ashframeCache*`
+settings remain accepted as fallbacks.
 
 ## Notes
 

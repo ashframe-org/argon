@@ -4,16 +4,15 @@
     .headlessServer = false,
     // .preferredAuthenticationAlgorithm = .ed25519, // Uncomment and change this if you own a server in an outdated game version where the default algorithm got compromised.
 
-    // --- Argon (Ashframe client) cache settings. Copy any of these into
-    // your own launchConfig.zon next to the game binary. On other servers
-    // the client behaves like stock Cubyz 0.4.1. ---
-    .ashframeCache = true, // master toggle for the per-server caches
-    .ashframeServer = "cubyz.ashframe.net", // caches only apply to this server
-    .ashframeCacheTTLHours = 24, // drop cached data older than this
-    .ashframeFlushMaxMB = 256, // RAM write buffer: flush to disk past this
-    .ashframeFlushIntervalMinutes = 5, // ...or past this age, whichever first
-    .ashframeCacheMaxMB = 256, // on-disk per-server budget, then evict
-    .ashframeReadCacheMB = 128, // in-RAM read cache: cleared on disconnect, warmed on connect (0 disables)
+    // --- Argon per-server cache settings. Copy any of these into
+    // your own launchConfig.zon next to the game binary. The cache applies
+    // to any multiplayer server, one directory per dialed server. ---
+    .serverCache = true, // master toggle for the per-server caches
+    .serverCacheTTLHours = 24, // drop cached data older than this
+    .serverCacheFlushMaxMB = 256, // RAM write buffer: flush to disk past this
+    .serverCacheFlushIntervalMinutes = 5, // ...or past this age, whichever first
+    .serverCacheMaxMB = 256, // on-disk per-server budget, then evict
+    .serverCacheReadCacheMB = 128, // in-RAM read cache: cleared on disconnect, warmed on connect (0 disables)
     .ashframeDebug = true, // [timing] join logs + cache info lines
     .ashframeLoadingScreen = true, // clean-join loading screen; false = vanilla-style instant reveal
     .chatWidth = 480, // chat window width in px (256..1200)

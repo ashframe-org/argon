@@ -1434,18 +1434,9 @@ pub fn reset() void {
 // made some inventory icons render blank (count only) until a rejoin. Run this
 // once after generateTextureArray(). Must be called from the main thread.
 pub fn warmAllTextures() void {
-	var noBlock: u32 = 0;
-	var baked: u32 = 0;
 	for (0..itemListSize) |i| {
 		const item = &itemList[i];
-		if (item.image.imageData.ptr == graphics.Image.defaultImage.imageData.ptr) {
-			if (item.getDisplayBlock() == null) noBlock += 1;
-			baked += 1;
-		}
 		_ = item.getTexture();
-	}
-	if (main.settings.launchConfig.ashframeDebug) {
-		std.log.info("[iconbake] warmAllTextures: items={d} blockImageItems={d} noDisplayBlock={d}", .{itemListSize, baked, noBlock});
 	}
 }
 // --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---

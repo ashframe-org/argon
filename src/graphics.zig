@@ -2695,6 +2695,13 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 		main.models.bindQuads();
 		// --- ASHFRAME CUSTOM CLIENT ---
 		c.glDrawElementsInstancedBaseVertexBaseInstance(c.GL_TRIANGLES, @intCast(6*faceData.items.len), c.GL_UNSIGNED_INT, null, 1, allocation.start*4, chunkAllocation.start);
+		// --- ASHFRAME CUSTOM CLIENT (inventory icon diagnosis) ---
+		if (main.settings.launchConfig.ashframeDebug) {
+			var f32px: [4]f32 = undefined;
+			c.glReadPixels(@intCast(textureSize/2), @intCast(textureSize/2), 1, 1, c.GL_RGBA, c.GL_FLOAT, &f32px);
+			std.log.info("[iconbake]  rgba16f-center id='{s}' = {d:.3},{d:.3},{d:.3},{d:.3}", .{block.id(), f32px[0], f32px[1], f32px[2], f32px[3]});
+		}
+		// --- ASHFRAME CUSTOM CLIENT ---
 	}
 
 	c.glDisable(c.GL_CULL_FACE);
@@ -2714,10 +2721,23 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 	c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
 	// --- ASHFRAME CUSTOM CLIENT (inventory icon diagnosis) ---
 	if (main.settings.launchConfig.ashframeDebug) {
-		var center: [4]u8 = undefined;
-		c.glReadPixels(@intCast(textureSize/2), @intCast(textureSize/2), 1, 1, c.GL_RGBA, c.GL_UNSIGNED_BYTE, &center);
+		// Read a coarse grid and count non-transparent samples.
+		var nonZero: u32 = 0;
+		var samples: u32 = 0;
+		var maxA: u8 = 0;
+		var x: u32 = 8;
+		while (x < textureSize) : (x += textureSize/8) {
+			var y: u32 = 8;
+			while (y < textureSize) : (y += textureSize/8) {
+				var px: [4]u8 = undefined;
+				c.glReadPixels(@intCast(x), @intCast(y), 1, 1, c.GL_RGBA, c.GL_UNSIGNED_BYTE, &px);
+				samples += 1;
+				if (px[3] != 0) nonZero += 1;
+				maxA = @max(maxA, px[3]);
+			}
+		}
 		const err = c.glGetError();
-		std.log.info("[iconbake] block={d} faces={d} centerRGBA={any} glErr={d}", .{block.typ, faceData.items.len, center, err});
+		std.log.info("[iconbake] id='{s}' typ={d} faces={d} nonZero={d}/{d} maxA={d} glErr={d}", .{block.id(), block.typ, faceData.items.len, nonZero, samples, maxA, err});
 	}
 	// --- ASHFRAME CUSTOM CLIENT ---
 	return texture;

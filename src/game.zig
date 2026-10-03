@@ -397,6 +397,12 @@ pub const World = struct { // MARK: World
 
 		main.Window.setMouseGrabbed(true);
 		main.blocks.meshes.generateTextureArray();
+		// --- ASHFRAME CUSTOM CLIENT (inventory icon fix): pre-bake every item
+		// icon here (safe, main thread) so block-derived inventory icons are
+		// never generated lazily inside the GUI pass (which left them blank on
+		// first join until a rejoin). ---
+		main.items.warmAllTextures();
+		// --- ASHFRAME CUSTOM CLIENT ---
 		main.particles.ParticleManager.generateTextureArray();
 		main.models.uploadModels();
 		main.entityModel.loadModelsAndTexture();

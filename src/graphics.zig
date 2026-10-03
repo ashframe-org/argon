@@ -2586,9 +2586,26 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 	c.glGetIntegerv(c.GL_DRAW_FRAMEBUFFER_BINDING, &prevFbo);
 	var prevViewport: [4]c_int = undefined;
 	c.glGetIntegerv(c.GL_VIEWPORT, &prevViewport);
+	// Save the rest of the state this function clobbers so it is truly safe to
+	// call anywhere (including mid-GUI). Only FBO+viewport were restored before;
+	// blend/cull/active-unit leaked into the caller and blanked other icons when
+	// the first icon was baked lazily inside the GUI pass.
+	const prevCull = c.glIsEnabled(c.GL_CULL_FACE) != 0;
+	var prevBlendEq: c_int = undefined;
+	c.glGetIntegerv(c.GL_BLEND_EQUATION_RGB, &prevBlendEq);
+	var prevBlendSrc: c_int = undefined;
+	var prevBlendDst: c_int = undefined;
+	c.glGetIntegerv(c.GL_BLEND_SRC_RGB, &prevBlendSrc);
+	c.glGetIntegerv(c.GL_BLEND_DST_RGB, &prevBlendDst);
+	var prevActiveUnit: c_int = undefined;
+	c.glGetIntegerv(c.GL_ACTIVE_TEXTURE, &prevActiveUnit);
 	defer {
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, @bitCast(prevFbo));
 		c.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+		if (prevCull) c.glEnable(c.GL_CULL_FACE) else c.glDisable(c.GL_CULL_FACE);
+		c.glBlendEquation(@intCast(prevBlendEq));
+		c.glBlendFunc(@intCast(prevBlendSrc), @intCast(prevBlendDst));
+		c.glActiveTexture(@intCast(prevActiveUnit));
 	}
 	c.glViewport(0, 0, textureSize, textureSize);
 

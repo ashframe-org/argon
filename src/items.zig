@@ -1426,6 +1426,21 @@ pub fn reset() void {
 	itemListSize = 0;
 }
 
+// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---
+// Force-generate every base item's icon texture NOW, on the render/main thread
+// at a safe point (world load), instead of lazily on first draw inside the GUI
+// pass. Block-derived items bake their icon via an offscreen chunk render
+// (graphics.generateBlockTexture); doing that mid-GUI left GL state wrong and
+// made some inventory icons render blank (count only) until a rejoin. Run this
+// once after generateTextureArray(). Must be called from the main thread.
+pub fn warmAllTextures() void {
+	for (0..itemListSize) |i| {
+		const item = &itemList[i];
+		_ = item.getTexture();
+	}
+}
+// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---
+
 pub fn register(_: []const u8, texturePath: []const u8, replacementTexturePath: []const u8, colorTexturePath: []const u8, colorReplacementTexturePath: []const u8, id: []const u8, zon: ZonElement) *BaseItem {
 	const newItem = &itemList[itemListSize];
 	defer itemListSize += 1;

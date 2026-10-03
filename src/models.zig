@@ -837,6 +837,19 @@ pub fn deinit() void {
 }
 
 pub fn uploadModels() void {
+	// Free any previous quad SSBO first: without this, reloading a world
+	// overwrote the pointer and leaked the old buffer (which also meant a
+	// rejoin left a stale-but-bindable buffer behind, masking binding bugs).
+	if (quadSSBO) |old| old.deinit();
 	quadSSBO = graphics.SSBO.initStatic(QuadInfo, quads.items);
 	quadSSBO.?.bind(4);
 }
+
+// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---
+/// Re-bind the quad SSBO to its shader binding point (4). Needed by any code
+/// that renders through the chunk shader outside the normal world pass (e.g.
+/// graphics.generateBlockTexture) so it doesn't depend on prior frame state.
+pub fn bindQuads() void {
+	if (quadSSBO) |ssbo| ssbo.bind(4);
+}
+// --- ASHFRAME CUSTOM CLIENT (inventory icon fix) ---

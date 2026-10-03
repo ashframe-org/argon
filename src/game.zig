@@ -397,15 +397,16 @@ pub const World = struct { // MARK: World
 
 		main.Window.setMouseGrabbed(true);
 		main.blocks.meshes.generateTextureArray();
-		// --- ASHFRAME CUSTOM CLIENT (inventory icon fix): pre-bake every item
-		// icon here (safe, main thread) so block-derived inventory icons are
-		// never generated lazily inside the GUI pass (which left them blank on
-		// first join until a rejoin). ---
-		main.items.warmAllTextures();
-		// --- ASHFRAME CUSTOM CLIENT ---
 		main.particles.ParticleManager.generateTextureArray();
 		main.models.uploadModels();
 		main.entityModel.loadModelsAndTexture();
+		// --- ASHFRAME CUSTOM CLIENT (inventory icon fix): pre-bake every item
+		// icon here, AFTER uploadModels() (which binds the quad SSBO at binding
+		// 4) and on the main thread, so block-derived inventory icons are baked
+		// with all chunk-shader SSBOs valid instead of relying on a prior world
+		// frame. ---
+		main.items.warmAllTextures();
+		// --- ASHFRAME CUSTOM CLIENT ---
 		main.ashframe_client.timingMark("textures+models done"); // ASHFRAME: timing
 
 		try Player.loadFrom(zon.getChild("player"));

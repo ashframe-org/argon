@@ -2683,6 +2683,17 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 		c.glActiveTexture(c.GL_TEXTURE2);
 		main.blocks.meshes.reflectivityAndAbsorptionTextureArray.bind();
 		block_texture.depthTexture.bindTo(5);
+		// --- ASHFRAME CUSTOM CLIENT (inventory icon fix): the chunk shader
+		// reads its geometry from indexed SSBOs (_faceData=3, _quads=4,
+		// _lightData=10). uploadData() only does glBindBuffer, and this
+		// function previously relied on whatever bindings the last world frame
+		// left. On the first join (before any world frame / uploadModels) those
+		// pointed at the wrong LOD buffers, so the block rendered as garbage and
+		// the icon came out blank until a rejoin. Bind them explicitly here. ---
+		main.renderer.chunk_meshing.faceBuffers[0].ssbo.bind(3);
+		main.renderer.chunk_meshing.lightBuffers[0].ssbo.bind(10);
+		main.models.bindQuads();
+		// --- ASHFRAME CUSTOM CLIENT ---
 		c.glDrawElementsInstancedBaseVertexBaseInstance(c.GL_TRIANGLES, @intCast(6*faceData.items.len), c.GL_UNSIGNED_INT, null, 1, allocation.start*4, chunkAllocation.start);
 	}
 

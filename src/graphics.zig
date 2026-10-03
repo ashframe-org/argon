@@ -2712,5 +2712,13 @@ pub fn generateBlockTexture(block: main.blocks.Block) Texture {
 	c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 
 	c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
+	// --- ASHFRAME CUSTOM CLIENT (inventory icon diagnosis) ---
+	if (main.settings.launchConfig.ashframeDebug) {
+		var center: [4]u8 = undefined;
+		c.glReadPixels(@intCast(textureSize/2), @intCast(textureSize/2), 1, 1, c.GL_RGBA, c.GL_UNSIGNED_BYTE, &center);
+		const err = c.glGetError();
+		std.log.info("[iconbake] block={d} faces={d} centerRGBA={any} glErr={d}", .{block.typ, faceData.items.len, center, err});
+	}
+	// --- ASHFRAME CUSTOM CLIENT ---
 	return texture;
 }
